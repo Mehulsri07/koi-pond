@@ -1,0 +1,12 @@
+[workspace]
+resolver = "3"
+members = ["crates/pond-wasm"]
+
+# Release profile for the browser build: maximum optimization, whole-program LTO, a
+# single codegen unit so LLVM sees everything at once, and abort on panic (no unwinding
+# tables in the .wasm; a panic in the koi is a bug, not something the page recovers from).
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+panic = "abort"
