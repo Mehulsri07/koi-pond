@@ -1,0 +1,18 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Koi pond proof</title>
+<style>
+  html, body { margin: 0; background: #000; color: #ccc; font: 12px/1.4 monospace; }
+  #pond { display: block; margin: 0 auto; background: #123; image-rendering: pixelated; cursor: crosshair; touch-action: manipulation; }
+  #overlay { position: fixed; top: 4px; left: 4px; margin: 0; padding: 4px 6px; background: rgba(0, 0, 0, 0.6); pointer-events: none; white-space: pre; }
+</style>
+</head>
+<body>
+<canvas id="pond" width="640" height="360"></canvas>
+<pre id="overlay">loading…</pre>
+<script type="module" src="main.js"></script>
+</body>
+</html>

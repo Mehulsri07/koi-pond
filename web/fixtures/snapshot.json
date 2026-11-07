@@ -1,0 +1,36 @@
+{
+  "schema_version": 3,
+  "account_id": 1001,
+  "repositories": [
+    {
+      "repository_id": 2001,
+      "visibility": "public",
+      "is_fork": false,
+      "primary_language": "Rust"
+    }
+  ],
+  "language_colors": { "Rust": "#dea584" },
+  "contribution_history": {
+    "observed_on": "2026-01-06",
+    "days": [
+      { "date": "2025-12-20", "contribution_count": 1 },
+      { "date": "2025-12-21", "contribution_count": 0 },
+      { "date": "2025-12-22", "contribution_count": 2 },
+      { "date": "2025-12-23", "contribution_count": 0 },
+      { "date": "2025-12-24", "contribution_count": 3 },
+      { "date": "2025-12-25", "contribution_count": 0 },
+      { "date": "2025-12-26", "contribution_count": 0 },
+      { "date": "2025-12-27", "contribution_count": 0 },
+      { "date": "2025-12-28", "contribution_count": 1 },
+      { "date": "2025-12-29", "contribution_count": 0 },
+      { "date": "2025-12-30", "contribution_count": 0 },
+      { "date": "2025-12-31", "contribution_count": 0 },
+      { "date": "2026-01-01", "contribution_count": 0 },
+      { "date": "2026-01-02", "contribution_count": 0 },
+      { "date": "2026-01-03", "contribution_count": 0 },
+      { "date": "2026-01-04", "contribution_count": 0 },
+      { "date": "2026-01-05", "contribution_count": 5 },
+      { "date": "2026-01-06", "contribution_count": 2 }
+    ]
+  }
+}
