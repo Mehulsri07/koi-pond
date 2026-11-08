@@ -2,17 +2,36 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Koi pond proof</title>
-<style>
-  html, body { margin: 0; background: #000; color: #ccc; font: 12px/1.4 monospace; }
-  #pond { display: block; margin: 0 auto; background: #123; image-rendering: pixelated; cursor: crosshair; touch-action: manipulation; }
-  #overlay { position: fixed; top: 4px; left: 4px; margin: 0; padding: 4px 6px; background: rgba(0, 0, 0, 0.6); pointer-events: none; white-space: pre; }
-</style>
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Mehul Srivastava · koi pond</title>
+<meta name="description" content="A pixel-art koi pond drawn from Mehul Srivastava's GitHub: the koi grows with his contributions, and each lilypad is one of his repositories.">
+<meta name="theme-color" content="#0b1d20">
+<link rel="stylesheet" href="style.css">
+<script type="module" src="src/main.js"></script>
 </head>
 <body>
-<canvas id="pond" width="640" height="360"></canvas>
-<pre id="overlay">loading…</pre>
-<script type="module" src="main.js"></script>
+<canvas id="pond" aria-label="A koi swimming in a pond of lilypads"></canvas>
+
+<header class="site-header">
+  <h1 class="site-title">Mehul Srivastava · koi pond</h1>
+  <nav class="site-links" aria-label="Links">
+    <a href="https://github.com/Mehulsri07">GitHub</a>
+    <button id="legend-button" type="button" aria-expanded="false" aria-controls="legend">What am I looking at?</button>
+  </nav>
+</header>
+
+<aside id="legend" class="legend" role="dialog" aria-modal="false" aria-labelledby="legend-title" inert>
+  <div class="legend-head">
+    <h2 id="legend-title">What am I looking at?</h2>
+    <button id="legend-close" class="legend-close" type="button" aria-label="Close">×</button>
+  </div>
+  <div id="legend-body" class="legend-body">
+    <p>A live portrait of Mehul's GitHub account. The koi grows with his contributions, and each lilypad is one of his public repositories.</p>
+  </div>
+</aside>
+
+<div id="pad-card" class="pad-card" role="tooltip" hidden></div>
+
+<p id="message" class="message" role="alert" hidden></p>
 </body>
 </html>

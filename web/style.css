@@ -1,0 +1,215 @@
+/* The pond is the page; everything else sits quietly over it. Every color is explicit:
+   the page does not follow the visitor's light or dark theme. */
+:root {
+  --water: #6fb3b8;
+  --ink: #e9f2ef;
+  --ink-dim: #b9cdc8;
+  --strip: rgba(9, 24, 27, 0.62);
+  --panel: rgba(244, 249, 246, 0.9);
+  --panel-ink: #17302f;
+  --focus: #f5d565;
+  --font: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --slide: 200ms ease-out;
+  color-scheme: only light;
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  height: 100%;
+  overflow: hidden;
+  background: var(--water);
+  font: 13px/1.4 var(--font);
+  -webkit-text-size-adjust: 100%;
+}
+
+#pond {
+  position: fixed;
+  top: 0;
+  left: 0;
+  display: block;
+  image-rendering: pixelated;
+  touch-action: manipulation;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-tap-highlight-color: transparent;
+}
+
+:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+/* Header: a slim translucent strip over the top of the pond. */
+.site-header {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 36px;
+  padding: max(6px, env(safe-area-inset-top)) max(12px, env(safe-area-inset-right)) 6px
+    max(12px, env(safe-area-inset-left));
+  background: var(--strip);
+  color: var(--ink);
+  -webkit-backdrop-filter: blur(4px);
+  backdrop-filter: blur(4px);
+}
+
+.site-title {
+  margin: 0;
+  font-size: inherit;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+
+.site-links {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-shrink: 0;
+}
+
+.site-links a {
+  color: var(--ink-dim);
+  text-decoration: none;
+}
+
+.site-links a:hover { color: var(--ink); text-decoration: underline; }
+
+.site-links button {
+  font: inherit;
+  color: var(--ink);
+  background: rgba(233, 242, 239, 0.12);
+  border: 1px solid rgba(233, 242, 239, 0.28);
+  border-radius: 4px;
+  padding: 3px 8px;
+  cursor: pointer;
+}
+
+.site-links button:hover { background: rgba(233, 242, 239, 0.2); }
+
+@media (max-width: 420px) {
+  html, body { font-size: 12px; }
+  .site-header { gap: 8px; padding-left: max(8px, env(safe-area-inset-left)); padding-right: max(8px, env(safe-area-inset-right)); }
+  .site-links { gap: 8px; }
+  .site-links button { padding: 3px 6px; }
+}
+
+/* Legend: slides over the pond from the right; from the bottom on phones. */
+.legend {
+  position: fixed;
+  z-index: 3;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: min(360px, 100vw);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: max(16px, env(safe-area-inset-top)) max(20px, env(safe-area-inset-right))
+    max(16px, env(safe-area-inset-bottom)) 20px;
+  background: var(--panel);
+  color: var(--panel-ink);
+  box-shadow: -4px 0 18px rgba(9, 24, 27, 0.25);
+  -webkit-backdrop-filter: blur(6px);
+  backdrop-filter: blur(6px);
+  transform: translateX(100%);
+  visibility: hidden;
+  transition: transform var(--slide), visibility 0s linear 200ms;
+}
+
+.legend.open {
+  transform: none;
+  visibility: visible;
+  transition: transform var(--slide), visibility 0s;
+}
+
+.legend-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.legend h2 {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.legend-close {
+  font: 20px/1 var(--font);
+  width: 32px;
+  height: 32px;
+  flex-shrink: 0;
+  color: var(--panel-ink);
+  background: transparent;
+  border: 0;
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.legend-close:hover { background: rgba(23, 48, 47, 0.08); }
+.legend-close:focus-visible { outline-color: var(--panel-ink); }
+
+.legend-body p { margin: 12px 0 0; }
+
+@media (max-width: 640px) {
+  .legend {
+    top: auto;
+    left: 0;
+    width: auto;
+    max-height: 70vh;
+    border-radius: 10px 10px 0 0;
+    padding-left: max(16px, env(safe-area-inset-left));
+    padding-right: max(16px, env(safe-area-inset-right));
+    box-shadow: 0 -4px 18px rgba(9, 24, 27, 0.25);
+    transform: translateY(100%);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .legend, .legend.open { transition: none; }
+}
+
+/* Pad card: filled and placed by web/src/card.js (Task 7). */
+.pad-card {
+  position: fixed;
+  z-index: 1;
+  top: 0;
+  left: 0;
+  max-width: min(260px, calc(100vw - 16px));
+  padding: 8px 10px;
+  border-radius: 6px;
+  background: var(--strip);
+  color: var(--ink);
+  pointer-events: auto;
+}
+
+.pad-card[hidden] { display: none; }
+
+/* Error: centered plain text over the pond. */
+.message {
+  position: fixed;
+  z-index: 1;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: max-content;
+  max-width: calc(100vw - 32px);
+  margin: 0;
+  text-align: center;
+  font-size: 15px;
+  color: #0f2a2e;
+  overflow-wrap: anywhere;
+}
+
+.message[hidden] { display: none; }
