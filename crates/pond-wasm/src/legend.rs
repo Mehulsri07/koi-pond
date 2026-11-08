@@ -128,11 +128,14 @@ mod tests {
         let snapshot: AccountSnapshot = serde_json::from_str(FIXTURE).unwrap();
         let development = derive_koi_development(&snapshot).unwrap();
         let (behavior, reason) = explain_behavior(&development);
-        let legend = legend_from(&development, behavior, reason, 7);
+        let layout = git_koi::pond::layout_pond(&snapshot, 640, 360).unwrap();
+        let pad_count = crate::pads::pads_from(&snapshot, &layout).len();
+        let legend = legend_from(&development, behavior, reason, pad_count);
         assert_eq!(legend.observed_on, "2026-01-06");
         assert_eq!(legend.total_contributions, 14);
         assert_eq!(legend.growth_stage, "hatchling");
-        assert_eq!(legend.pad_count, 7);
+        assert_eq!(legend.pad_count, pad_count);
+        assert_eq!(pad_count, 7);
         assert_eq!(legend.behavior, behavior_name(behavior));
         assert_eq!(legend.languages.len(), 5);
         assert_eq!(legend.languages[0].name, "Python");
@@ -141,7 +144,7 @@ mod tests {
         let json = serde_json::to_value(&legend).unwrap();
         assert!(json.get("renderMode").is_none());
         assert!(json["reason"]["rule"].is_string());
-        assert_eq!(json["padCount"], 7);
+        assert_eq!(json["padCount"], pad_count);
     }
 
     #[test]

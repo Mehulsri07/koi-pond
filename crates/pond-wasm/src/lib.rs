@@ -105,13 +105,15 @@ impl PondKoi {
 
     /// For testing: replace the snapshot's total contributions so every growth stage can be
     /// seen. The koi regrows to that size and starts its swim again from the rest point;
-    /// the legend's total and growth stage follow. Negative and non-finite totals are
+    /// the legend's total, growth stage, behavior, and reason follow, because a milestone
+    /// crossing depends on the total. Negative and non-finite totals are
     /// ignored; others are truncated to a whole count.
     pub fn set_growth_override(&mut self, total: f64) {
         if !total.is_finite() || total < 0.0 {
             return;
         }
         self.koi_development.total_contributions = total as u64;
+        (self.behavior, self.behavior_reason) = explain_behavior(&self.koi_development);
         self.koi_renderer = KoiRenderer::new(&self.koi_development, self.koi_body);
         self.swim_state =
             SwimState::new(self.seed, self.pond, self.koi_renderer.body_length_pixels());
@@ -232,6 +234,18 @@ mod tests {
                 .unwrap();
             assert!(koi.pads_json().starts_with('['));
         }
+    }
+
+    #[test]
+    fn a_growth_override_that_crosses_a_milestone_makes_the_koi_dart() {
+        let mut koi = PondKoi::new(FIXTURE, "gold", 640, 360, 7).ok().unwrap();
+        assert_eq!(koi.behavior(), "cruise");
+        koi.set_growth_override(1003.0);
+        assert_eq!(koi.behavior(), "dart");
+        let legend: serde_json::Value = serde_json::from_str(&koi.legend_json()).unwrap();
+        assert_eq!(legend["behavior"], "dart");
+        assert_eq!(legend["reason"]["rule"], "crossed_milestone");
+        assert_eq!(legend["reason"]["value"], 1000);
     }
 
     #[test]

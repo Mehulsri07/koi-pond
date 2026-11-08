@@ -10,8 +10,9 @@ use serde::Serialize;
 pub struct PadView {
     /// The repository's `owner/name`.
     pub repo: String,
-    /// The repository's page on GitHub.
-    pub url: String,
+    /// The repository's page on GitHub, or none when the name is not a plain `owner/name`.
+    /// The page must still set text with `textContent` and attributes with `setAttribute`.
+    pub url: Option<String>,
     /// The repository's primary language, if it has one.
     pub language: Option<String>,
     /// The language's GitHub color as `#rrggbb`, if it has one.
@@ -42,9 +43,14 @@ pub fn pads_from(account_snapshot: &AccountSnapshot, layout: &PondLayout) -> Vec
         .pads
         .iter()
         .filter_map(|pad| {
-            let owned = owned_repositories
+            let mut entries = owned_repositories
                 .iter()
-                .find(|owned| owned.repository_id == pad.repository_id)?;
+                .filter(|owned| owned.repository_id == pad.repository_id);
+            let owned = entries.next()?;
+            // git-koi sizes the pad from the largest count among duplicate entries.
+            let commits = entries.fold(owned.owner_commit_count, |most, entry| {
+                most.max(entry.owner_commit_count)
+            });
             let language = account_snapshot
                 .repositories
                 .iter()
@@ -64,10 +70,11 @@ pub fn pads_from(account_snapshot: &AccountSnapshot, layout: &PondLayout) -> Vec
                 });
             Some(PadView {
                 repo: owned.name_with_owner.clone(),
-                url: format!("https://github.com/{}", owned.name_with_owner),
+                url: is_plain_name(&owned.name_with_owner)
+                    .then(|| format!("https://github.com/{}", owned.name_with_owner)),
                 language,
                 language_color,
-                commits: owned.owner_commit_count,
+                commits,
                 size: pad.size.level(),
                 diameter: pad.size.diameter_pixels(),
                 bloom: pad.bloom.map(|bloom| match bloom {
@@ -82,6 +89,17 @@ pub fn pads_from(account_snapshot: &AccountSnapshot, layout: &PondLayout) -> Vec
             })
         })
         .collect()
+}
+
+/// Whether a name is `owner/name` made only of letters, digits, `.`, `_`, and `-`.
+fn is_plain_name(name_with_owner: &str) -> bool {
+    let is_part = |part: &str| {
+        !part.is_empty()
+            && part
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
+    };
+    matches!(name_with_owner.split_once('/'), Some((owner, name)) if is_part(owner) && is_part(name))
 }
 
 /// Where the koi rests: just below the biggest pad's center, kept inside the pond; the
@@ -122,13 +140,20 @@ mod tests {
             .iter()
             .find(|pad| pad.repo == "Mehulsri07/StrataField")
             .unwrap();
-        assert_eq!(strata.url, "https://github.com/Mehulsri07/StrataField");
+        assert_eq!(
+            strata.url.as_deref(),
+            Some("https://github.com/Mehulsri07/StrataField")
+        );
         assert_eq!(strata.commits, 120);
         assert_eq!(strata.size, 5);
         assert_eq!(strata.diameter, 48);
         assert_eq!(strata.language.as_deref(), Some("TypeScript"));
         assert_eq!(strata.language_color.as_deref(), Some("#3178c6"));
-        assert!(pads.iter().all(|pad| pad.url.ends_with(&pad.repo)));
+        assert!(pads.iter().all(|pad| {
+            pad.url
+                .as_deref()
+                .is_some_and(|url| url.ends_with(&pad.repo))
+        }));
     }
 
     #[test]
@@ -143,14 +168,75 @@ mod tests {
         assert_eq!(notes.bloom, None);
     }
 
+    fn pad_at(x: f64, y: f64, diameter: u32) -> PadView {
+        PadView {
+            repo: "o/r".to_owned(),
+            url: None,
+            language: None,
+            language_color: None,
+            commits: 0,
+            size: 1,
+            diameter,
+            bloom: None,
+            x,
+            y,
+            notch: 0.0,
+        }
+    }
+
     #[test]
     fn rest_point_sits_beside_the_biggest_pad() {
+        let pads = vec![pad_at(100.0, 50.0, 16), pad_at(200.0, 100.0, 48)];
+        let [x, y] = rest_point(&pads, 640, 360);
+        assert_eq!(x, 200.0);
+        assert!((y - (100.0 + 0.6 * 48.0)).abs() < 1e-9);
+    }
+
+    #[test]
+    fn rest_point_of_the_fixture_is_below_its_biggest_pad() {
         let pads = fixture_pads();
         let biggest = pads.iter().find(|pad| pad.size == 5).unwrap();
         let [x, y] = rest_point(&pads, 640, 360);
         assert_eq!(x, biggest.x);
-        assert!((y - (biggest.y + 0.6 * f64::from(biggest.diameter))).abs() < 1e-9 || y == 360.0);
-        assert!((0.0..=640.0).contains(&x) && (0.0..=360.0).contains(&y));
+        assert!((y - (biggest.y + 28.8)).abs() < 1e-9);
+    }
+
+    #[test]
+    fn equally_big_pads_rest_beside_the_first() {
+        let pads = vec![pad_at(100.0, 50.0, 32), pad_at(300.0, 150.0, 32)];
+        assert_eq!(rest_point(&pads, 640, 360), [100.0, 50.0 + 19.2]);
+    }
+
+    #[test]
+    fn hostile_names_get_no_link() {
+        let mut snapshot: AccountSnapshot = serde_json::from_str(FIXTURE).unwrap();
+        snapshot.owned_repositories.as_mut().unwrap()[0].name_with_owner =
+            "x/y\" onmouseover=\"alert(1)".to_owned();
+        let layout = layout_pond(&snapshot, 640, 360).unwrap();
+        let pads = pads_from(&snapshot, &layout);
+        assert_eq!(pads.len(), 7);
+        let hostile = pads
+            .iter()
+            .find(|pad| pad.repo.contains("onmouseover"))
+            .unwrap();
+        assert_eq!(hostile.url, None);
+        assert_eq!(pads.iter().filter(|pad| pad.url.is_none()).count(), 1);
+    }
+
+    #[test]
+    fn duplicate_owned_entries_agree_on_commits_and_size() {
+        let mut snapshot: AccountSnapshot = serde_json::from_str(FIXTURE).unwrap();
+        let owned = snapshot.owned_repositories.as_mut().unwrap();
+        let mut twin = owned[0].clone();
+        twin.owner_commit_count = 5;
+        owned.push(twin);
+        let layout = layout_pond(&snapshot, 640, 360).unwrap();
+        let pads = pads_from(&snapshot, &layout);
+        let strata = pads
+            .iter()
+            .find(|pad| pad.repo.ends_with("StrataField"))
+            .unwrap();
+        assert_eq!((strata.commits, strata.size), (120, 5));
     }
 
     #[test]
@@ -159,6 +245,7 @@ mod tests {
         pads.truncate(1);
         pads[0].y = 359.0;
         pads[0].x = 700.0;
+        pads[0].diameter = 16;
         assert_eq!(rest_point(&pads, 640, 360), [640.0, 360.0]);
     }
 
