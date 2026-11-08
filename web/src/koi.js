@@ -6,9 +6,11 @@
 //   koi.drawInto(ctx)   // render the koi and draw it at its top left, in pond pixels
 //   koi.pads()          // pads_json(), parsed
 //   koi.legend()        // legend_json(), parsed
-//   koi.free()
+//   koi.free()          // free the PondKoi; a later rebuild(view) makes a new one
+//   koi.source          // what create() was given; PondKoi is read from it at each build
 //
-// create() and rebuild() throw what PondKoi::new throws (an invalid snapshot, say).
+// create() and rebuild() throw what PondKoi::new throws (an invalid snapshot, say). A
+// failed rebuild leaves the old PondKoi in place; the caller decides whether to free it.
 
 let live = 0;
 
@@ -17,7 +19,8 @@ export function liveCount() {
   return live;
 }
 
-export function create(view, { PondKoi, memory, snapshotJson, body, seed }) {
+export function create(view, source) {
+  const { memory } = source;
   // The koi frame goes through a small canvas so drawImage composites its alpha over the
   // layers below (putImageData would overwrite them).
   const frameCanvas = document.createElement('canvas');
@@ -27,13 +30,25 @@ export function create(view, { PondKoi, memory, snapshotJson, body, seed }) {
   let instance = null;
 
   function build(nextView) {
+    const { PondKoi, snapshotJson, body, seed } = source;
     const next = new PondKoi(snapshotJson, body, nextView.pondWidth, nextView.pondHeight, seed);
     live += 1;
-    if (instance) {
-      instance.free();
-      live -= 1;
-    }
+    release();
     instance = next;
+  }
+
+  // Free the current PondKoi. After a trap inside wasm, free() itself can throw; the
+  // instance is abandoned either way.
+  function release() {
+    if (!instance) return;
+    const old = instance;
+    instance = null;
+    live -= 1;
+    try {
+      old.free();
+    } catch (error) {
+      console.error(error);
+    }
   }
 
   function copyFrame() {
@@ -54,6 +69,7 @@ export function create(view, { PondKoi, memory, snapshotJson, body, seed }) {
   build(view);
 
   return {
+    source,
     get instance() {
       return instance;
     },
@@ -75,10 +91,7 @@ export function create(view, { PondKoi, memory, snapshotJson, body, seed }) {
       return JSON.parse(instance.legend_json());
     },
     free() {
-      if (!instance) return;
-      instance.free();
-      instance = null;
-      live -= 1;
+      release();
     },
   };
 }

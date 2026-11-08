@@ -1,6 +1,9 @@
 // The pond's size for a viewport. The pond is drawn in native pixels and shown at a
 // whole-number scale: 2 on viewports at least 1600×900 CSS px, else 1. The canvas's
-// backing store is its CSS size × devicePixelRatio, so pond pixels stay square.
+// backing store is its CSS size × devicePixelRatio (rounded). At a whole-number
+// devicePixelRatio every pond pixel is an exact square of device pixels; at a fractional
+// one (1.25, 1.5) neighboring pond pixels differ by one device pixel in size, but nearest-
+// neighbor scaling keeps them sharp, never blurred.
 export const SCALE_2_MIN_WIDTH = 1600;
 export const SCALE_2_MIN_HEIGHT = 900;
 

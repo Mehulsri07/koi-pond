@@ -20,12 +20,24 @@
 //   now, dt     this frame's rAF time (ms) and step (s, capped at 0.1)
 //   gulped      true on the frame the koi gulps food
 //
+// Failures stay local. A layer whose draw or rebuild throws is switched off, logged, and
+// noted on screen ("Part of the pond could not be drawn"); the rest keeps drawing. A koi
+// that throws is freed and noted ("The koi stopped swimming"); a pond rebuild that
+// throws is noted ("The pond could not be redrawn at this size"). Either way the koi is
+// built again on the next settled resize. The frame loop schedules its next frame first,
+// so nothing stops it.
+//
+// The page background takes the color of the pond's bottom-right pixel after each
+// rebuild, so the up-to-1 px strip a scale-2 pond leaves at odd viewport sizes blends in.
+//
 // Test hooks on window.__pond (for scripts/e2e.mjs; harmless on the live site):
 //   ready              true once the koi is swimming
-//   error              the visible error message, or null
+//   error              the visible message (every current problem), or null
 //   view               the current view
 //   state              the state object above
+//   layers             the LAYERS array (tests may push a layer)
 //   frames             frames drawn since load
+//   settles            settled resizes handled (after the 300 ms debounce)
 //   rebuilds           pond rebuilds after resizes
 //   liveKoi            PondKoi instances alive right now (1 when nothing leaks)
 //   padCount           pads in the current pond
@@ -34,7 +46,6 @@
 //                      in pond pixels
 //   canvasSample()     one hash per row of the visible canvas, to detect change
 
-import init, { PondKoi } from '../pkg/pond_wasm.js';
 import { computeView } from './view.js';
 import * as koiModule from './koi.js';
 import * as water from './water.js';
@@ -47,6 +58,9 @@ const RESIZE_DEBOUNCE_MS = 300;
 const MAX_STEP_SECONDS = 0.1;
 const DATA_ERROR = "The pond's data could not be read";
 const WASM_ERROR = 'The koi could not be drawn here: WebAssembly failed to load';
+const KOI_ERROR = 'The koi stopped swimming';
+const REBUILD_ERROR = 'The pond could not be redrawn at this size';
+const LAYER_ERROR = 'Part of the pond could not be drawn';
 
 const params = new URLSearchParams(location.search);
 const canvas = document.getElementById('pond');
@@ -54,6 +68,7 @@ const display = canvas.getContext('2d', { alpha: false });
 const scene = document.createElement('canvas');
 const sceneContext = scene.getContext('2d');
 const message = document.getElementById('message');
+const header = document.querySelector('.site-header');
 
 const reducedMotionQuery = matchMedia('(prefers-reduced-motion: reduce)');
 const state = {
@@ -72,11 +87,17 @@ reducedMotionQuery.addEventListener('change', (event) => {
 });
 
 let wasm = null;
+let koiHandle = null; // kept after a failure so the koi can be built again
+const disabledLayers = new Set();
+let sampleEdge = true;
+
 const hooks = {
   ready: false,
   error: null,
   frames: 0,
+  settles: 0,
   rebuilds: 0,
+  layers: LAYERS,
   state,
   get view() {
     return state.view;
@@ -93,12 +114,21 @@ const hooks = {
 };
 window.__pond = hooks;
 
-function showError(text, error) {
+// The message lists every current problem, one per line. The element stays in the page
+// (role="alert"), so changing its text is announced.
+const problems = new Map();
+function renderMessage() {
+  hooks.error = problems.size ? [...problems.values()].join('\n') : null;
+  message.textContent = hooks.error ?? '';
+}
+function report(key, text, error) {
   const reason = error?.message ?? (error === undefined ? '' : String(error));
-  hooks.error = reason ? `${text}: ${reason}` : text;
-  message.textContent = hooks.error;
-  message.hidden = false;
+  problems.set(key, reason ? `${text}: ${reason}` : text);
+  renderMessage();
   if (error !== undefined) console.error(error);
+}
+function clear(key) {
+  if (problems.delete(key)) renderMessage();
 }
 
 // The pond canvas and the visible canvas follow the view. Resizing a canvas resets its
@@ -118,10 +148,29 @@ function sizeCanvases(view) {
   display.imageSmoothingEnabled = false;
 }
 
+function disableLayer(layer, error) {
+  disabledLayers.add(layer);
+  report('layer', LAYER_ERROR, error);
+}
+
+function koiFailed(error) {
+  koiHandle?.free();
+  state.koi = null;
+  report('koi', KOI_ERROR, error);
+}
+
 function rebuildLayers() {
   state.pads = state.koi ? state.koi.pads() : [];
   state.legend = state.koi ? state.koi.legend() : null;
-  for (const layer of LAYERS) layer.rebuild?.(state);
+  for (const layer of LAYERS) {
+    if (disabledLayers.has(layer)) continue;
+    try {
+      layer.rebuild?.(state);
+    } catch (error) {
+      disableLayer(layer, error);
+    }
+  }
+  sampleEdge = true;
 }
 
 function applyView() {
@@ -129,14 +178,19 @@ function applyView() {
   const pondChanged = next.pondWidth !== state.view.pondWidth || next.pondHeight !== state.view.pondHeight;
   state.view = next;
   sizeCanvases(next);
-  if (!pondChanged) return;
-  if (state.koi) {
+  hooks.settles += 1;
+  const koiMissing = koiHandle !== null && state.koi === null;
+  if (!pondChanged && !koiMissing) return;
+  if (koiHandle) {
     try {
-      state.koi.rebuild(next);
+      koiHandle.rebuild(next);
+      state.koi = koiHandle;
+      clear('koi');
+      clear('rebuild');
     } catch (error) {
-      state.koi.free();
+      koiHandle.free();
       state.koi = null;
-      showError(DATA_ERROR, error);
+      report('rebuild', REBUILD_ERROR, error);
     }
   }
   rebuildLayers();
@@ -144,28 +198,61 @@ function applyView() {
 }
 
 let resizeTimer = 0;
-window.addEventListener('resize', () => {
+function scheduleApply() {
   clearTimeout(resizeTimer);
   resizeTimer = setTimeout(applyView, RESIZE_DEBOUNCE_MS);
-});
+}
+window.addEventListener('resize', scheduleApply);
+
+// devicePixelRatio can change without a resize (moving the window to another screen).
+function watchPixelRatio() {
+  matchMedia(`(resolution: ${devicePixelRatio}dppx)`).addEventListener(
+    'change',
+    () => {
+      scheduleApply();
+      watchPixelRatio();
+    },
+    { once: true },
+  );
+}
+
+// The legend sits below the header on desktop, so it never covers the header button.
+new ResizeObserver(() => {
+  document.documentElement.style.setProperty('--header-height', `${header.offsetHeight}px`);
+}).observe(header);
 
 let lastTime = null;
 function tick(now) {
+  requestAnimationFrame(tick);
   const dt = lastTime === null ? 0 : Math.min(MAX_STEP_SECONDS, (now - lastTime) / 1000);
   lastTime = now;
   state.now = now;
   state.dt = dt;
-  try {
-    state.gulped = state.koi ? state.koi.step(dt) : false;
-    for (const layer of LAYERS) layer.draw(sceneContext, state, now);
-  } catch (error) {
-    // A trap inside the koi leaves it unusable; keep drawing the pond without it.
-    state.koi = null;
-    showError('The koi stopped swimming', error);
+  state.gulped = false;
+  if (state.koi) {
+    try {
+      state.gulped = state.koi.step(dt);
+    } catch (error) {
+      koiFailed(error);
+    }
+  }
+  for (const layer of LAYERS) {
+    if (disabledLayers.has(layer)) continue;
+    try {
+      layer.draw(sceneContext, state, now);
+    } catch (error) {
+      // The koi layer's draw renders the koi: a throw there is the koi failing.
+      if (layer === koiModule) koiFailed(error);
+      else disableLayer(layer, error);
+    }
   }
   display.drawImage(scene, 0, 0, canvas.width, canvas.height);
+  if (sampleEdge) {
+    sampleEdge = false;
+    const [r, g, b] = sceneContext.getImageData(scene.width - 1, scene.height - 1, 1, 1).data;
+    document.documentElement.style.setProperty('--pond-edge', `rgb(${r}, ${g}, ${b})`);
+  }
   hooks.frames += 1;
-  requestAnimationFrame(tick);
 }
 
 async function fetchText(path) {
@@ -189,6 +276,14 @@ async function loadSnapshotText() {
   return fetchText('fixtures/snapshot.json');
 }
 
+// The glue is imported here, not at the top, so a missing or blocked pkg still shows a
+// message instead of a blank page.
+async function loadWasm() {
+  const glue = await import('../pkg/pond_wasm.js');
+  const exports = await glue.default();
+  return { exports, PondKoi: glue.PondKoi };
+}
+
 // The koi's seed comes from the account, so a visitor sees the same swim each load.
 function seedFrom(snapshot) {
   const id = snapshot?.account_id;
@@ -196,35 +291,35 @@ function seedFrom(snapshot) {
 }
 
 async function boot() {
-  const wasmLoad = init().then(
-    (exports) => exports,
-    (error) => {
-      showError(WASM_ERROR, error);
-      return null;
-    },
-  );
+  const wasmLoad = loadWasm().catch((error) => {
+    report('wasm', WASM_ERROR, error);
+    return null;
+  });
   let snapshotJson;
   try {
     snapshotJson = await loadSnapshotText();
     state.snapshot = JSON.parse(snapshotJson);
   } catch (error) {
-    showError(DATA_ERROR, error);
+    report('data', DATA_ERROR, error);
+    await wasmLoad;
     return;
   }
-  wasm = await wasmLoad;
-  if (!wasm) return;
+  const loaded = await wasmLoad;
+  if (!loaded) return;
+  wasm = loaded.exports;
   try {
-    state.koi = koiModule.create(state.view, {
-      PondKoi,
+    koiHandle = koiModule.create(state.view, {
+      PondKoi: loaded.PondKoi,
       memory: wasm.memory,
       snapshotJson,
       body: BODY,
       seed: seedFrom(state.snapshot),
     });
   } catch (error) {
-    showError(DATA_ERROR, error);
+    report('data', DATA_ERROR, error);
     return;
   }
+  state.koi = koiHandle;
   rebuildLayers();
   hooks.ready = true;
 }
@@ -267,6 +362,7 @@ function canvasSample() {
 
 sizeCanvases(state.view);
 setupLegend();
+watchPixelRatio();
 rebuildLayers();
 requestAnimationFrame(tick);
 boot();

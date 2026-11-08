@@ -2,6 +2,10 @@
    the page does not follow the visitor's light or dark theme. */
 :root {
   --water: #6fb3b8;
+  /* The pond's edge color, set from the drawn pond by main.js; fills any sub-pixel strip
+     beside the canvas. */
+  --pond-edge: #2f6468;
+  --header-height: 48px;
   --ink: #e9f2ef;
   --ink-dim: #b9cdc8;
   --strip: rgba(9, 24, 27, 0.62);
@@ -19,7 +23,7 @@ html, body {
   margin: 0;
   height: 100%;
   overflow: hidden;
-  background: var(--water);
+  background: var(--pond-edge);
   font: 13px/1.4 var(--font);
   -webkit-text-size-adjust: 100%;
 }
@@ -108,14 +112,14 @@ html, body {
 .legend {
   position: fixed;
   z-index: 3;
-  top: 0;
+  /* Below the header, so the header button stays usable while the panel is open. */
+  top: var(--header-height);
   right: 0;
   bottom: 0;
   width: min(360px, 100vw);
   overflow-y: auto;
   overscroll-behavior: contain;
-  padding: max(16px, env(safe-area-inset-top)) max(20px, env(safe-area-inset-right))
-    max(16px, env(safe-area-inset-bottom)) 20px;
+  padding: 16px max(20px, env(safe-area-inset-right)) max(16px, env(safe-area-inset-bottom)) 20px;
   background: var(--panel);
   color: var(--panel-ink);
   box-shadow: -4px 0 18px rgba(9, 24, 27, 0.25);
@@ -167,7 +171,7 @@ html, body {
     top: auto;
     left: 0;
     width: auto;
-    max-height: 70vh;
+    max-height: min(70vh, calc(100% - var(--header-height)));
     border-radius: 10px 10px 0 0;
     padding-left: max(16px, env(safe-area-inset-left));
     padding-right: max(16px, env(safe-area-inset-right));
@@ -204,12 +208,12 @@ html, body {
   left: 50%;
   transform: translate(-50%, -50%);
   width: max-content;
-  max-width: calc(100vw - 32px);
+  max-width: calc(100vw - 32px - env(safe-area-inset-left) - env(safe-area-inset-right));
   margin: 0;
   text-align: center;
+  white-space: pre-line;
   font-size: 15px;
   color: #0f2a2e;
   overflow-wrap: anywhere;
 }
 
-.message[hidden] { display: none; }

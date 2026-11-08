@@ -40,7 +40,9 @@ read" with the reason.
 
 The pond's native size comes from the window: scale 2 on windows at least 1600×900 CSS px,
 else 1, and `pond = floor(window / scale)`. After a resize settles (300 ms) the pond is
-rebuilt at the new size and the koi starts again.
+rebuilt at the new size and the koi starts again. The canvas's backing store is its CSS size
+× `devicePixelRatio`: pond pixels are exact squares at a whole-number ratio, and sharp but
+one device pixel uneven at a fractional one.
 
 ## Test
 
@@ -49,9 +51,11 @@ cargo fmt --check
 cargo clippy --target wasm32-unknown-unknown -- -D warnings
 cargo test -p pond-wasm
 scripts/build.sh
-node scripts/e2e.mjs [--only <name>]
+node scripts/e2e.mjs [--only <name>] [--screenshots <dir>]
 ```
 
 `e2e.mjs` serves `web/` on a free port and runs each check in headless Chromium (Playwright)
-at 1280×800 and at 400×800 as a phone, then saves desktop and phone screenshots. The page's
+at 1280×800 and at 400×800 as a phone, then saves desktop and phone screenshots to
+`--screenshots <dir>`, `$E2E_SCREENSHOTS`, or `<os tmpdir>/koi-pond-e2e`. It stops at once
+if `web/pkg` is missing (run `scripts/build.sh`). The page's
 test hooks are on `window.__pond`; `web/src/main.js` lists them.
