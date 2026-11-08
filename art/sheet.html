@@ -1,0 +1,166 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Pond sprite sheet</title>
+<!--
+  Every sprite in web/art/ at 4× on day water and on night water, a few pads dressed
+  with flowers and droplets as the pond will show them, and the palette.
+  Serve the repository root (for example `python3 -m http.server` there) and open
+  /art/sheet.html; run `node scripts/art.mjs` first so the PNGs are current.
+-->
+<style>
+  :root {
+    --day: #1f4a47;
+    --night: #0a171b;
+    --ink: #e9f2ef;
+    --ink-dim: #9fb8b2;
+    --page: #13201f;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    padding: 16px;
+    background: var(--page);
+    color: var(--ink);
+    font: 13px/1.4 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  }
+  h1 { font-size: 16px; margin: 0 0 4px; }
+  h2 { font-size: 13px; margin: 0 0 8px; color: var(--ink-dim); font-weight: normal; text-transform: uppercase; letter-spacing: 0.08em; }
+  .layout { display: flex; gap: 16px; align-items: flex-start; flex-wrap: wrap; }
+  .waters { flex: 1 1 760px; display: flex; flex-direction: column; gap: 16px; min-width: 0; }
+  .water { border-radius: 6px; padding: 12px; }
+  .water.day { background: var(--day); }
+  .water.night { background: var(--night); }
+  .row { display: flex; flex-wrap: wrap; gap: 12px 16px; align-items: flex-end; margin-bottom: 12px; }
+  figure { margin: 0; display: flex; flex-direction: column; align-items: center; gap: 4px; }
+  figcaption { color: var(--ink-dim); font-size: 11px; }
+  canvas { image-rendering: pixelated; display: block; }
+  .palette { flex: 0 0 280px; background: #0f1a1a; border-radius: 6px; padding: 12px; }
+  .swatch { display: flex; align-items: center; gap: 8px; margin: 2px 0; }
+  .chip { width: 28px; height: 18px; border-radius: 2px; flex: none; }
+  .key { width: 14px; text-align: center; color: var(--ink); }
+  .hex { color: var(--ink-dim); }
+  .error { color: #f5a; }
+</style>
+</head>
+<body>
+<h1>Pond sprites</h1>
+<p class="hex">4× native. Pads are drawn with the notch pointing right and the light from the top left.</p>
+<div class="layout">
+  <div class="waters">
+    <section class="water day"><h2>Day water</h2><div class="sprites"></div><h2>On the pond</h2><div class="combos row"></div></section>
+    <section class="water night"><h2>Night water</h2><div class="sprites"></div><h2>On the pond</h2><div class="combos row"></div></section>
+  </div>
+  <aside class="palette"><h2>Palette</h2><div id="swatches"></div></aside>
+</div>
+<script type="module">
+const SCALE = 4;
+const GROUPS = [
+  ['pad-16', 'pad-24', 'pad-32', 'pad-40', 'pad-48'],
+  ['lotus-pink-s', 'lotus-white-s', 'lotus-purple-s', 'lotus-pink-l', 'lotus-white-l', 'lotus-purple-l', 'bud'],
+  ['droplet', 'food', 'firefly-0', 'firefly-1', 'moon-reflection'],
+];
+// Pads dressed as the pond will show them: [pad, [sprite, dx, dy] ...], offsets from the
+// pad's anchor to the dressing's anchor, in native pixels.
+const COMBOS = [
+  ['pad-16', []],
+  ['pad-24', [['lotus-pink-s', -2, 1]]],
+  ['pad-32', [['lotus-white-s', -3, 1]]],
+  ['pad-40', [['lotus-purple-l', -4, 2], ['droplet', 4, 9], ['droplet', -11, -4]]],
+  ['pad-48', [['lotus-pink-l', -5, 3], ['droplet', 8, 10], ['droplet', -4, -13]]],
+  ['pad-48', [['lotus-white-l', -4, 2], ['bud', 12, -10], ['droplet', -13, 6]]],
+];
+
+function load(name) {
+  return new Promise((resolve, reject) => {
+    const image = new Image();
+    image.onload = () => resolve(image);
+    image.onerror = () => reject(new Error(`could not load ${name}.png`));
+    image.src = `../web/art/${name}.png`;
+  });
+}
+
+function figure(canvas, label) {
+  const element = document.createElement('figure');
+  const caption = document.createElement('figcaption');
+  caption.textContent = label;
+  element.append(canvas, caption);
+  return element;
+}
+
+function spriteCanvas(image) {
+  const canvas = document.createElement('canvas');
+  canvas.width = image.width * SCALE;
+  canvas.height = image.height * SCALE;
+  const ctx = canvas.getContext('2d');
+  ctx.imageSmoothingEnabled = false;
+  ctx.drawImage(image, 0, 0, canvas.width, canvas.height);
+  return canvas;
+}
+
+function comboCanvas([padName, dressing], images, sprites) {
+  const pad = sprites[padName];
+  const margin = 12;
+  const width = pad.width + margin * 2;
+  const height = pad.height + margin * 2;
+  const canvas = document.createElement('canvas');
+  canvas.width = width * SCALE;
+  canvas.height = height * SCALE;
+  const ctx = canvas.getContext('2d');
+  ctx.imageSmoothingEnabled = false;
+  ctx.scale(SCALE, SCALE);
+  const cx = margin + pad.anchor[0];
+  const cy = margin + pad.anchor[1];
+  ctx.drawImage(images[padName], margin, margin);
+  for (const [name, dx, dy] of dressing) {
+    const sprite = sprites[name];
+    ctx.drawImage(images[name], cx + dx - sprite.anchor[0], cy + dy - sprite.anchor[1]);
+  }
+  return canvas;
+}
+
+async function main() {
+  const [sprites, palette] = await Promise.all([
+    fetch('../web/art/sprites.json').then((response) => response.json()),
+    fetch('palette.json').then((response) => response.json()),
+  ]);
+  const names = Object.keys(sprites);
+  const images = Object.fromEntries(await Promise.all(names.map(async (name) => [name, await load(name)])));
+  for (const water of document.querySelectorAll('.water')) {
+    const holder = water.querySelector('.sprites');
+    for (const group of GROUPS) {
+      const row = document.createElement('div');
+      row.className = 'row';
+      for (const name of group) {
+        const { width, height } = sprites[name];
+        row.append(figure(spriteCanvas(images[name]), `${name} ${width}×${height}`));
+      }
+      holder.append(row);
+    }
+    const combos = water.querySelector('.combos');
+    for (const combo of COMBOS) {
+      combos.append(figure(comboCanvas(combo, images, sprites), [combo[0], ...combo[1].map(([name]) => name)].join(' + ')));
+    }
+  }
+  const swatches = document.getElementById('swatches');
+  for (const [key, { name, color }] of Object.entries(palette.legend)) {
+    const row = document.createElement('div');
+    row.className = 'swatch';
+    row.innerHTML = `<span class="chip" style="background:${color}"></span><span class="key">${key}</span><span>${name}</span><span class="hex">${color}</span>`;
+    swatches.append(row);
+  }
+  document.body.dataset.ready = 'true';
+}
+
+main().catch((error) => {
+  const message = document.createElement('p');
+  message.className = 'error';
+  message.textContent = error.message;
+  document.body.prepend(message);
+  document.body.dataset.ready = 'error';
+});
+</script>
+</body>
+</html>

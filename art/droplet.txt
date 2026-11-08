@@ -1,0 +1,5 @@
+# A water bead resting on a pad, lit from the top left.
+.ZZ.
+ZczZ
+ZzZX
+.XX.

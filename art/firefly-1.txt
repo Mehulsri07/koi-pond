@@ -1,0 +1,6 @@
+# A firefly between blinks, dim.
+.....
+..O..
+.OYO.
+..O..
+.....

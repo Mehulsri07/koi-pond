@@ -1,0 +1,138 @@
+{
+  "pad-16": {
+    "width": 16,
+    "height": 16,
+    "anchor": [
+      8,
+      8
+    ]
+  },
+  "pad-24": {
+    "width": 24,
+    "height": 24,
+    "anchor": [
+      12,
+      12
+    ]
+  },
+  "pad-32": {
+    "width": 38,
+    "height": 38,
+    "anchor": [
+      19,
+      19
+    ]
+  },
+  "pad-40": {
+    "width": 46,
+    "height": 46,
+    "anchor": [
+      23,
+      23
+    ]
+  },
+  "pad-48": {
+    "width": 54,
+    "height": 54,
+    "anchor": [
+      27,
+      27
+    ]
+  },
+  "lotus-pink-s": {
+    "width": 13,
+    "height": 9,
+    "anchor": [
+      6,
+      7
+    ]
+  },
+  "lotus-pink-l": {
+    "width": 19,
+    "height": 13,
+    "anchor": [
+      9,
+      11
+    ]
+  },
+  "lotus-white-s": {
+    "width": 13,
+    "height": 9,
+    "anchor": [
+      6,
+      7
+    ]
+  },
+  "lotus-white-l": {
+    "width": 19,
+    "height": 13,
+    "anchor": [
+      9,
+      11
+    ]
+  },
+  "lotus-purple-s": {
+    "width": 13,
+    "height": 9,
+    "anchor": [
+      6,
+      7
+    ]
+  },
+  "lotus-purple-l": {
+    "width": 19,
+    "height": 13,
+    "anchor": [
+      9,
+      11
+    ]
+  },
+  "bud": {
+    "width": 7,
+    "height": 13,
+    "anchor": [
+      3,
+      12
+    ]
+  },
+  "droplet": {
+    "width": 4,
+    "height": 4,
+    "anchor": [
+      2,
+      2
+    ]
+  },
+  "moon-reflection": {
+    "width": 24,
+    "height": 9,
+    "anchor": [
+      12,
+      4
+    ]
+  },
+  "firefly-0": {
+    "width": 5,
+    "height": 5,
+    "anchor": [
+      2,
+      2
+    ]
+  },
+  "firefly-1": {
+    "width": 5,
+    "height": 5,
+    "anchor": [
+      2,
+      2
+    ]
+  },
+  "food": {
+    "width": 3,
+    "height": 3,
+    "anchor": [
+      1,
+      1
+    ]
+  }
+}
