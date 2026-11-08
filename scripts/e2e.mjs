@@ -5,7 +5,7 @@
 // Run scripts/build.sh first so web/pkg exists (the script stops at once if it does not).
 // It serves web/ itself on a free port, loads the page with ?fixture
 // (web/fixtures/snapshot.json), runs every check at each size it names, saves desktop and
-// phone screenshots, and exits non-zero on any failure. --only runs just the checks whose
+// phone screenshots (plus a 4× floor detail crop), and exits non-zero on any failure. --only runs just the checks whose
 // name contains the text. Screenshots go to --screenshots <dir>, else $E2E_SCREENSHOTS,
 // else <os tmpdir>/koi-pond-e2e; the script prints where.
 //
@@ -33,8 +33,10 @@ function argument(name) {
 }
 const SCREENSHOT_DIR = resolve(argument('--screenshots') ?? process.env.E2E_SCREENSHOTS ?? join(tmpdir(), 'koi-pond-e2e'));
 const SCREENSHOTS = {
-  desktop: join(SCREENSHOT_DIR, 'site-shell-desktop.png'),
-  phone: join(SCREENSHOT_DIR, 'site-shell-phone.png'),
+  desktop: join(SCREENSHOT_DIR, 'site-floor-desktop.png'),
+  phone: join(SCREENSHOT_DIR, 'site-floor-phone.png'),
+  // A 160×100 pond-pixel crop around a rock and a plant clump, at 4× so pixels can be judged.
+  detail: join(SCREENSHOT_DIR, 'site-floor-detail.png'),
 };
 
 // Pre-flight: without the wasm build every page check would only time out.
@@ -435,6 +437,106 @@ check('the page edge matches the pond edge', ['desktop'], async ({ page, open })
   assert.equal(colors.page, colors.pond);
 });
 
+// The floor and caustics (web/src/floor.js, web/src/caustics.js).
+
+// The floor hash once boot has rebuilt the layers with the snapshot's seed.
+async function floorHashAfterBoot(page) {
+  await page.waitForFunction(() => window.__pond.floorSeed === window.__pond.state.snapshot?.account_id, null, { timeout: 5000 });
+  return page.evaluate(() => window.__pond.floorHash);
+}
+
+check('the floor is the same every load', BOTH, async ({ page, errors, open }) => {
+  assert.equal(await open(), null);
+  const first = await floorHashAfterBoot(page);
+  assert.equal(typeof first, 'number');
+  assert.equal(await open(), null);
+  assert.equal(await floorHashAfterBoot(page), first, 'a second load lays the same floor');
+  // Another account lays another floor.
+  const fixture = JSON.parse(await readFile(join(WEB_ROOT, 'fixtures', 'snapshot.json'), 'utf8'));
+  await page.route('**/fixtures/snapshot.json', (route) =>
+    route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ ...fixture, account_id: fixture.account_id + 1 }) }),
+  );
+  assert.equal(await open(), null);
+  assert.notEqual(await floorHashAfterBoot(page), first, 'another seed lays another floor');
+  assert.deepEqual(errors, []);
+});
+
+check('caustics tile seamlessly', ['desktop'], async ({ page, open }) => {
+  assert.equal(await open(), null);
+  const result = await page.evaluate(() => {
+    const frames = window.__pond.causticFrames();
+    const problems = [];
+    let lit = 0;
+    let maxAlpha = 0;
+    frames.forEach((frame, index) => {
+      if (frame.width !== 64 || frame.height !== 64) problems.push(`frame ${index} is ${frame.width}×${frame.height}`);
+      const tile = frame.getContext('2d').getImageData(0, 0, 64, 64).data;
+      // The same light rendered one pixel past the tile: row 64 and column 64 continue
+      // rows and columns 63, so they must equal row and column 0.
+      const wide = window.__pond.causticRegion(index, 65, 65).getContext('2d').getImageData(0, 0, 65, 65).data;
+      for (let i = 0; i < 64; i += 1) {
+        for (let c = 0; c < 4; c += 1) {
+          const rowSeam = Math.abs(wide[(64 * 65 + i) * 4 + c] - tile[i * 4 + c]);
+          const columnSeam = Math.abs(wide[(i * 65 + 64) * 4 + c] - tile[i * 64 * 4 + c]);
+          const inside = Math.abs(wide[(i * 65 + i) * 4 + c] - tile[(i * 64 + i) * 4 + c]);
+          if (rowSeam > 1 || columnSeam > 1 || inside > 1) problems.push(`frame ${index} seam at ${i}, channel ${c}`);
+        }
+      }
+      for (let p = 3; p < tile.length; p += 4) {
+        if (tile[p]) lit += 1;
+        maxAlpha = Math.max(maxAlpha, tile[p]);
+      }
+    });
+    return { count: frames.length, problems: problems.slice(0, 5), lit, maxAlpha };
+  });
+  assert.equal(result.count, 16);
+  assert.deepEqual(result.problems, []);
+  assert.ok(result.maxAlpha <= Math.floor(0.18 * 255), `caustic alpha ${result.maxAlpha} is at most 0.18`);
+  const share = result.lit / (16 * 64 * 64);
+  assert.ok(share > 0.05 && share < 0.4, `caustics light ${(share * 100).toFixed(1)}% of the tile`);
+});
+
+check('reduced motion holds the caustics', ['desktop'], async ({ page, open }) => {
+  const watch = async () => {
+    const seen = new Set();
+    for (let index = 0; index < 12; index += 1) {
+      seen.add(await page.evaluate(() => window.__pond.causticFrame));
+      await page.waitForTimeout(60);
+    }
+    return [...seen];
+  };
+  assert.equal(await open(), null);
+  assert.ok((await watch()).length > 3, 'caustics play at 8 fps');
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  await page.waitForTimeout(100);
+  assert.deepEqual(await watch(), [0], 'reduced motion holds frame 0');
+  assert.equal(await open(), null);
+  assert.deepEqual(await watch(), [0], 'reduced motion from the start holds frame 0');
+});
+
+check('the floor and caustics cost under 1.5 ms a frame', ['desktop'], async ({ page, open }) => {
+  assert.equal(await open(), null);
+  await page.waitForTimeout(1000);
+  const cost = await page.evaluate(() => window.__pond.layerCost(['floor', 'caustics'], 120));
+  console.log(`      floor + caustics: ${cost.toFixed(3)} ms a frame (rasterized)`);
+  const inLoop = await page.evaluate(() => window.__pond.layerMs);
+  assert.ok(Number.isFinite(inLoop.floor) && Number.isFinite(inLoop.caustics), `layerMs ${JSON.stringify(inLoop)}`);
+  assert.ok(cost < 1.5, `floor + caustics take ${cost.toFixed(3)} ms a frame`);
+});
+
+check('the page edge takes the floor edge color', ['desktop'], async ({ page, open }) => {
+  assert.equal(await open(), null);
+  await resizeAndSettle(page, { width: 1601, height: 901 });
+  await page.waitForTimeout(300);
+  const colors = await page.evaluate(() => {
+    const canvas = document.getElementById('pond');
+    const [r, g, b] = canvas.getContext('2d').getImageData(canvas.width - 1, canvas.height - 1, 1, 1).data;
+    return { pond: `rgb(${r}, ${g}, ${b})`, page: getComputedStyle(document.documentElement).backgroundColor };
+  });
+  assert.equal(colors.page, colors.pond);
+  assert.notEqual(colors.pond, 'rgb(111, 179, 184)', 'the floor, not the placeholder water');
+});
+
 // ---------------------------------------------------------------------------------------
 
 const only = argument('--only');
@@ -492,6 +594,24 @@ if (!only) {
     } finally {
       await session.context.close();
     }
+  }
+  // The detail crop: a 4× context, clipped to the region floor.js names (a rock beside a
+  // plant clump, away from the header).
+  const detailContext = await browser.newContext({ ...SIZES.desktop, deviceScaleFactor: 4 });
+  try {
+    const page = await detailContext.newPage();
+    await page.goto(`${baseUrl}?fixture`);
+    assert.equal(await waitForBoot(page), null);
+    await floorHashAfterBoot(page);
+    await page.waitForTimeout(500);
+    const region = await page.evaluate(() => window.__pond.floorDetail);
+    await page.screenshot({ path: SCREENSHOTS.detail, clip: { ...region, width: 160, height: 100 } });
+    console.log(`screenshot: ${SCREENSHOTS.detail}`);
+  } catch (error) {
+    failed += 1;
+    console.log(`FAIL  screenshot [detail]\n      ${error.message ?? error}`);
+  } finally {
+    await detailContext.close();
   }
 }
 

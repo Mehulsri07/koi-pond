@@ -45,13 +45,24 @@
 //   koiPixels()        {count, x, y}: the koi frame's opaque pixels and their centroid,
 //                      in pond pixels
 //   canvasSample()     one hash per row of the visible canvas, to detect change
+//   floorHash          a hash of the floor bitmap's pixels (web/src/floor.js)
+//   floorSeed          the account_id the floor was laid for (null before the snapshot)
+//   floorDetail        {x, y}: a 160×100 pond-pixel region with a rock and a plant clump
+//   causticFrame       the caustic frame drawn last (web/src/caustics.js)
+//   causticFrames()    the 16 caustic tiles
+//   causticRegion(frame, width, height)  that frame's light over a larger region
+//   layerMs            per named layer, a running average of its draw time in the frame
+//                      loop (ms; draw calls only, as the canvas may raster later)
+//   layerCost(names, n)  ms a frame for the named layers, drawn n times into a pond-size
+//                      canvas and flushed each time, less the cost of the flush alone
 
 import { computeView } from './view.js';
 import * as koiModule from './koi.js';
-import * as water from './water.js';
+import * as floor from './floor.js';
+import * as caustics from './caustics.js';
 import { setupLegend } from './legend.js';
 
-const LAYERS = [water, koiModule];
+const LAYERS = [floor, caustics, koiModule];
 
 const BODY = 'black';
 const RESIZE_DEBOUNCE_MS = 300;
@@ -111,6 +122,22 @@ const hooks = {
   wasmMemoryBytes: () => (wasm ? wasm.memory.buffer.byteLength : 0),
   koiPixels: () => koiPixels(),
   canvasSample: () => canvasSample(),
+  get floorHash() {
+    return floor.current()?.hash ?? null;
+  },
+  get floorSeed() {
+    return floor.current()?.accountId ?? null;
+  },
+  get floorDetail() {
+    return floor.current()?.detail ?? null;
+  },
+  get causticFrame() {
+    return caustics.currentFrame();
+  },
+  causticFrames: () => caustics.frames(),
+  causticRegion: (frame, width, height) => caustics.renderRegion(caustics.seedFor(state), frame, width, height),
+  layerMs: {},
+  layerCost: (names, count) => layerCost(names, count),
 };
 window.__pond = hooks;
 
@@ -221,6 +248,33 @@ new ResizeObserver(() => {
   document.documentElement.style.setProperty('--header-height', `${header.offsetHeight}px`);
 }).observe(header);
 
+function timeLayer(name, ms) {
+  const average = hooks.layerMs[name];
+  hooks.layerMs[name] = average === undefined ? ms : average * 0.95 + ms * 0.05;
+}
+
+// Draw the named layers into a pond-size canvas `count` times, reading one pixel back each
+// time so the canvas rasters every frame, and subtract the cost of that read alone.
+function layerCost(names, count) {
+  const layers = LAYERS.filter((layer) => names.includes(layer.name));
+  const bench = document.createElement('canvas');
+  bench.width = state.view.pondWidth;
+  bench.height = state.view.pondHeight;
+  const context = bench.getContext('2d');
+  context.imageSmoothingEnabled = false;
+  const run = (draw) => {
+    const started = performance.now();
+    for (let index = 0; index < count; index += 1) {
+      if (draw) for (const layer of layers) layer.draw(context, state, index * 125);
+      context.getImageData(index % bench.width, 0, 1, 1);
+    }
+    return (performance.now() - started) / count;
+  };
+  run(true); // warm up
+  const flushOnly = run(false);
+  return Math.max(0, run(true) - flushOnly);
+}
+
 let lastTime = null;
 function tick(now) {
   requestAnimationFrame(tick);
@@ -239,7 +293,9 @@ function tick(now) {
   for (const layer of LAYERS) {
     if (disabledLayers.has(layer)) continue;
     try {
+      const started = performance.now();
       layer.draw(sceneContext, state, now);
+      if (layer.name) timeLayer(layer.name, performance.now() - started);
     } catch (error) {
       // The koi layer's draw renders the koi: a throw there is the koi failing.
       if (layer === koiModule) koiFailed(error);

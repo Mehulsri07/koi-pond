@@ -1,10 +1,9 @@
 /* The pond is the page; everything else sits quietly over it. Every color is explicit:
    the page does not follow the visitor's light or dark theme. */
 :root {
-  --water: #6fb3b8;
   /* The pond's edge color, set from the drawn pond by main.js; fills any sub-pixel strip
      beside the canvas. */
-  --pond-edge: #2f6468;
+  --pond-edge: #0e2425;
   --header-height: 48px;
   --ink: #e9f2ef;
   --ink-dim: #b9cdc8;
