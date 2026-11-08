@@ -543,11 +543,89 @@ check('reduced motion holds the caustics', ['desktop'], async ({ page, open }) =
 check('the floor and caustics cost under 1.5 ms a frame', ['desktop'], async ({ page, open }) => {
   assert.equal(await open(), null);
   await page.waitForTimeout(1000);
-  const cost = await page.evaluate(() => window.__pond.layerCost(['floor', 'caustics'], 120));
-  console.log(`      floor + caustics: ${cost.toFixed(3)} ms a frame (rasterized)`);
+  // The median of 5 runs, against a plain pond-size blit measured the same way, so a slow
+  // machine slows both sides: the budget is what these layers add beyond that blit.
+  // Measuring must not disturb the live light: its state is read just before and after,
+  // in the same task, before any frame could redraw it.
+  const { cost, before, after } = await page.evaluate(() => {
+    const live = () => window.__pond.causticLive();
+    const start = live();
+    const measured = window.__pond.layerCost(['floor', 'caustics'], { runs: 5, count: 60 });
+    return { cost: measured, before: start, after: live() };
+  });
+  const added = cost.layers - cost.calibration;
+  console.log(`      floor + caustics: ${cost.layers.toFixed(3)} ms a frame, one plain blit ${cost.calibration.toFixed(3)} ms, added ${added.toFixed(3)} ms`);
+  assert.ok(added < 1.5, `floor + caustics add ${added.toFixed(3)} ms a frame beyond one blit`);
+  // The draw calls in the live frame loop (JavaScript time only) fit the budget too.
   const inLoop = await page.evaluate(() => window.__pond.layerMs);
-  assert.ok(Number.isFinite(inLoop.floor) && Number.isFinite(inLoop.caustics), `layerMs ${JSON.stringify(inLoop)}`);
-  assert.ok(cost < 1.5, `floor + caustics take ${cost.toFixed(3)} ms a frame`);
+  assert.ok(inLoop.floor + inLoop.caustics < 1.5, `in-loop draw calls ${JSON.stringify(inLoop)}`);
+  assert.deepEqual(after, before, 'measuring leaves the live caustics as they were');
+});
+
+check('the floor is built once, for the account', ['desktop'], async ({ page, errors, open }) => {
+  // Hold the snapshot back: until it arrives no floor is laid, so no stand-in floor flashes.
+  let release;
+  const held = new Promise((done) => { release = done; });
+  await page.route('**/fixtures/snapshot.json', async (route) => { await held; await route.continue(); });
+  await page.goto(`${baseUrl}?fixture`);
+  await page.waitForFunction(() => window.__pond && window.__pond.frames > 5);
+  const waiting = await page.evaluate(() => ({ builds: window.__pond.floorBuilds, hash: window.__pond.floorHash }));
+  assert.deepEqual(waiting, { builds: 0, hash: null }, 'no floor before the snapshot');
+  release();
+  await page.waitForFunction(() => window.__pond.ready);
+  await page.waitForTimeout(300);
+  const booted = await page.evaluate(() => ({ builds: window.__pond.floorBuilds, seed: window.__pond.floorSeed, caustics: window.__pond.causticBuilds }));
+  assert.deepEqual(booted, { builds: 1, seed: 1001, caustics: 1 }, 'one floor and one set of caustics, for the account');
+  assert.deepEqual(errors, []);
+});
+
+check('error paths still lay a floor', ['desktop'], async ({ page, open }) => {
+  const floorAfter = async () => {
+    await page.waitForFunction(() => window.__pond.floorBuilds > 0, null, { timeout: 5000 });
+    await page.waitForTimeout(200);
+    return page.evaluate(() => ({ builds: window.__pond.floorBuilds, seed: window.__pond.floorSeed, hasHash: window.__pond.floorHash !== null }));
+  };
+  // Unreadable data: the floor falls back to seed 0.
+  await page.route('**/fixtures/snapshot.json', (route) => route.fulfill({ status: 200, contentType: 'application/json', body: '{"account_id": ' }));
+  assert.ok(await open());
+  assert.deepEqual(await floorAfter(), { builds: 1, seed: 0, hasHash: true }, 'bad data');
+  await page.unroute('**/fixtures/snapshot.json');
+  // A snapshot the koi cannot use still names the account.
+  await page.route('**/fixtures/snapshot.json', (route) => route.fulfill({ status: 200, contentType: 'application/json', body: '{"account_id": 7}' }));
+  assert.ok(await open());
+  assert.deepEqual(await floorAfter(), { builds: 1, seed: 7, hasHash: true }, 'unusable snapshot');
+  await page.unroute('**/fixtures/snapshot.json');
+  // No WebAssembly: the koi is missing but the floor is the account's.
+  await page.route('**/pkg/pond_wasm_bg.wasm', (route) => route.fulfill({ status: 404, body: '' }));
+  assert.ok(await open());
+  assert.deepEqual(await floorAfter(), { builds: 1, seed: 1001, hasHash: true }, 'missing wasm');
+});
+
+check('tiny ponds still build', ['desktop'], async ({ page, errors, open }) => {
+  assert.equal(await open(), null);
+  const results = await page.evaluate(async () => {
+    const floor = await import('/src/floor.js');
+    const caustics = await import('/src/caustics.js');
+    const out = [];
+    for (const [width, height] of [[200, 120], [50, 400], [30, 300], [8, 8]]) {
+      try {
+        const laid = floor.layFloor(width, height, 1234);
+        const light = caustics.measureLight(width, height, 1.5);
+        out.push({
+          width, height, canvas: laid.canvas.width === width && laid.canvas.height === height,
+          finite: [laid.bedShare, laid.rockGroups, laid.stones, laid.detail.x, laid.detail.y, light.mean].every(Number.isFinite),
+          runs: light.runs.every((run) => run.every(Number.isFinite)),
+        });
+      } catch (error) {
+        out.push({ width, height, error: String(error) });
+      }
+    }
+    return out;
+  });
+  for (const result of results) {
+    assert.deepEqual(result, { width: result.width, height: result.height, canvas: true, finite: true, runs: true }, JSON.stringify(result));
+  }
+  assert.deepEqual(errors, []);
 });
 
 check('the page edge takes the floor edge color', ['desktop'], async ({ page, open }) => {

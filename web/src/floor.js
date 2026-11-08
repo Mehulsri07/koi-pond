@@ -1,9 +1,23 @@
 // The floor layer: a shallow-banked pond deepening toward the middle, with plant beds
 // and rock groups along the walls.
 //
-//   buildFloor(pondWidth, pondHeight, seed) -> HTMLCanvasElement   deterministic per inputs
+//   buildFloor(pondWidth, pondHeight, seed, {top}) -> HTMLCanvasElement
+//   layFloor(pondWidth, pondHeight, seed, {top}) -> {canvas, detail, bedShare, rockGroups, stones}
 //   draw(ctx, state) / rebuild(state)    the layer contract (web/src/main.js)
-//   current()   {canvas, hash, accountId, detail, bedShare} for the last build
+//   current()   {canvas, hash, accountId, detail, bedShare, ...} for the last build
+//   buildCount()  floors laid since load
+//
+// The same inputs give the same floor in a given browser. Floating-point functions such
+// as Math.sin may differ in the last bit between engines, so the pixels (and floorHash)
+// are not promised to match across browsers.
+//
+// The floor is laid only once state.accountId is known (web/src/main.js); until then it
+// draws a plain EDGE fill, so no stand-in floor flashes before the account's own.
+// `top` is the band at the top of the pond (pond px) where rock groups are not rooted,
+// because the header covers it: the larger of 15% of the pond's height and the header
+// plus 24 px. On short or narrow ponds the beds get thin and the rock groups degrade: a
+// second pass relaxes their spacing and depth, and a pond too small for any still lays
+// sand, beds and light with no rocks at all.
 //
 // The floor is painted once per rebuild into one bitmap; each frame only blits it.
 // Painted bottom up, all hard-edged pixels:
@@ -99,7 +113,7 @@ function createGround(width, height, seed) {
   const depth = (x, y) => {
     const u = (2 * x) / width - 1;
     const v = (2 * y) / height - 1;
-    const round = 1 - Math.hypot(u, v) / Math.SQRT2;
+    const round = 1 - Math.sqrt(u * u + v * v) / Math.SQRT2;
     const mixed = 0.5 * (wallDistance(x, y) / half) + 0.6 * round;
     return smoothstep(0.08, 0.72, mixed + 0.22 * (noise(x, y, 120, seed + 7) - 0.5));
   };
@@ -115,7 +129,7 @@ function createGround(width, height, seed) {
   const reach = (x, y) => {
     const dx = Math.min(x, width - 1 - x);
     const dy = Math.min(y, height - 1 - y);
-    const corner = Math.max(0, 1 - Math.hypot(dx, dy) / (half * 0.6));
+    const corner = Math.max(0, 1 - Math.sqrt(dx * dx + dy * dy) / (half * 0.6));
     const patch = Math.max(0, noise(x, y, 150, seed + 5) - 0.32) * 2.2;
     return (patch * patch + 0.9 * corner * corner) * half;
   };
@@ -191,7 +205,7 @@ function pickWeighted(random, list, weights) {
 
 function paintPebbles(paint, ground, random, seed) {
   const { width, height } = ground;
-  const tries = Math.round((width * height) / 180);
+  const tries = width < 9 || height < 9 ? 0 : Math.round((width * height) / 180);
   for (let count = 0; count < tries; count += 1) {
     const x = random.int(3, width - 6);
     const y = random.int(3, height - 6);
@@ -216,7 +230,8 @@ function paintPebbles(paint, ground, random, seed) {
 // to one side through the middle, with a darker midrib and a 1 px shadow.
 function paintFallenLeaves(paint, ground, random) {
   const { width, height } = ground;
-  const count = Math.round(5 + (width * height) / 70000);
+  // Leaves keep 30 px from the walls; a pond too small for that gets none.
+  const count = width < 62 || height < 62 ? 0 : Math.round(5 + (width * height) / 70000);
   const directions = [[1, 0], [1, 1], [0, 1], [-1, 1]];
   let placed = 0;
   for (let attempt = 0; attempt < count * 30 && placed < count; attempt += 1) {
@@ -303,7 +318,7 @@ function paintRock(paint, rock, mask, seed) {
       // Shade from the slope of the height field, lit from the top left.
       const gx = ((at(x + 1, y) - at(x - 1, y)) / 2) * rock.radius;
       const gy = ((at(x, y + 1) - at(x, y - 1)) / 2) * rock.radius;
-      const lambert = (-gx * light[0] - gy * light[1] + light[2]) / Math.hypot(gx, gy, 1);
+      const lambert = (-gx * light[0] - gy * light[1] + light[2]) / Math.sqrt(gx * gx + gy * gy + 1);
       let tone = Math.round(1.2 + lambert * 3.2 + (bayer(x, y) - 0.5) * 0.5);
       if (noise(left + x, top + y, 2.2, seed + 4) > 0.84) tone -= 1; // pits
       // A hard rim: dark where the stone meets the ground at the bottom right, lit at the top left.
@@ -324,8 +339,8 @@ function bedDepthAt(ground, x, y, angle) {
 }
 
 // 2–4 rock groups at the inner edge of the deeper beds, kept off the top wall (the
-// header covers it).
-function placeRockGroups(ground, random, seed) {
+// header covers it: see `top` above).
+function placeRockGroups(ground, random, seed, top) {
   const { width, height } = ground;
   const count = random.int(2, 4);
   const groups = [];
@@ -341,8 +356,8 @@ function placeRockGroups(ground, random, seed) {
     else if (along < width + height) [x, y] = [width - 1, along - width];
     else if (along < 2 * width + height) [x, y] = [along - width - height, height - 1];
     else [x, y] = [0, along - 2 * width - height];
-    // Off the top wall, which the header covers.
-    if (y < 120) continue;
+    // Off the top wall and the top of the side walls, which the header covers.
+    if (y < top) continue;
     const angle = ground.inward(Math.round(x), Math.round(y));
     const bedDepth = bedDepthAt(ground, x, y, angle);
     if (bedDepth < (relaxed ? 10 : 22)) continue;
@@ -350,7 +365,7 @@ function placeRockGroups(ground, random, seed) {
     const cx = x + Math.cos(angle) * into;
     const cy = y + Math.sin(angle) * into;
     if (cx < VIGNETTE || cy < VIGNETTE || cx > width - VIGNETTE || cy > height - VIGNETTE) continue;
-    if (groups.some((group) => Math.hypot(group.x - cx, group.y - cy) < spacing)) continue;
+    if (groups.some((group) => Math.sqrt((group.x - cx) ** 2 + (group.y - cy) ** 2) < spacing)) continue;
     groups.push({ x: cx, y: cy });
   }
   const stones = [];
@@ -429,7 +444,7 @@ function paintBeds(paint, ground, masks, random, seed) {
   // Round leaves, 4×3, lit at the top left and dark at the bottom right.
   const roundCount = Math.round(bedArea / 320);
   let rounds = 0;
-  for (let attempt = 0; attempt < roundCount * 4 && rounds < roundCount; attempt += 1) {
+  for (let attempt = 0; width >= 5 && height >= 4 && attempt < roundCount * 4 && rounds < roundCount; attempt += 1) {
     const x = random.int(0, width - 5);
     const y = random.int(0, height - 4);
     if (!bed[y * width + x] || onRock(x, y)) continue;
@@ -461,7 +476,7 @@ function finish(paint, ground, random) {
       const dx = Math.min(x, width - 1 - x);
       const dy = Math.min(y, height - 1 - y);
       let wall = Math.min(dx, dy);
-      if (dx < VIGNETTE && dy < VIGNETTE) wall = Math.max(0, VIGNETTE - Math.hypot(VIGNETTE - dx, VIGNETTE - dy));
+      if (dx < VIGNETTE && dy < VIGNETTE) wall = Math.max(0, VIGNETTE - Math.sqrt((VIGNETTE - dx) ** 2 + (VIGNETTE - dy) ** 2));
       const t = Math.max(0, 1 - wall / VIGNETTE);
       const rim = wall === 0 ? 1 : Math.min(1, Math.floor(t * t * steps + dither) / steps);
       const index = (y * width + x) * 3;
@@ -475,7 +490,8 @@ function finish(paint, ground, random) {
     }
   }
   // Sediment: faint single specks, a little lighter or darker, mostly in deeper water.
-  const specks = Math.round((width * height) / 240);
+  // Specks keep out of the rim band; a pond too small for that gets none.
+  const specks = width <= 2 * VIGNETTE || height <= 2 * VIGNETTE ? 0 : Math.round((width * height) / 240);
   for (let count = 0; count < specks; count += 1) {
     const x = random.int(VIGNETTE, width - VIGNETTE - 1);
     const y = random.int(VIGNETTE, height - VIGNETTE - 1);
@@ -487,14 +503,19 @@ function finish(paint, ground, random) {
   return image;
 }
 
-function lay(width, height, seed) {
+// The band at the top (pond px) kept free of rock groups: see `top` above.
+export function topBand(pondHeight, headerPondPixels) {
+  return Math.max(Math.round(0.15 * pondHeight), Math.ceil(headerPondPixels) + 24);
+}
+
+export function layFloor(width, height, seed, { top = topBand(height, 0) } = {}) {
   const random = createRandom(seed);
   const paint = createPainter(width, height);
   const ground = createGround(width, height, seed);
   paintSand(paint, width, height, seed);
   paintPebbles(paint, ground, random, seed);
   paintFallenLeaves(paint, ground, random);
-  const { groups, stones } = placeRockGroups(ground, random, seed);
+  const { groups, stones } = placeRockGroups(ground, random, seed, top);
   const masks = stones.map(rockMask);
   paintBeds(paint, ground, masks, random, seed);
   masks.forEach((mask) => paintRockShadow(paint, mask));
@@ -511,8 +532,8 @@ function lay(width, height, seed) {
   return { canvas, detail, bedShare: ground.bedShare, rockGroups: groups.length, stones: stones.length };
 }
 
-export function buildFloor(pondWidth, pondHeight, seed) {
-  return lay(pondWidth, pondHeight, seed).canvas;
+export function buildFloor(pondWidth, pondHeight, seed, options) {
+  return layFloor(pondWidth, pondHeight, seed, options).canvas;
 }
 
 function hashCanvas(canvas) {
@@ -523,25 +544,36 @@ function hashCanvas(canvas) {
 }
 
 let built = null;
+let builds = 0;
 
 export function current() {
   return built;
 }
 
+export function buildCount() {
+  return builds;
+}
+
 export function rebuild(state) {
-  const { pondWidth, pondHeight } = state.view;
-  const accountId = state.snapshot?.account_id ?? null;
-  const seed = seedOf(accountId ?? 0, SALT);
-  if (built && built.width === pondWidth && built.height === pondHeight && built.seed === seed) {
-    built.accountId = accountId;
-    return;
-  }
-  const laid = lay(pondWidth, pondHeight, seed);
-  built = { ...laid, seed, accountId, width: pondWidth, height: pondHeight, hash: hashCanvas(laid.canvas) };
+  if (state.accountId === null || state.accountId === undefined) return;
+  const { pondWidth, pondHeight, scale } = state.view;
+  const { accountId } = state;
+  const seed = seedOf(accountId, SALT);
+  const top = topBand(pondHeight, (state.headerHeight ?? 0) / (scale || 1));
+  if (built && built.width === pondWidth && built.height === pondHeight && built.seed === seed && built.top === top) return;
+  const laid = layFloor(pondWidth, pondHeight, seed, { top });
+  builds += 1;
+  built = { ...laid, seed, top, accountId, width: pondWidth, height: pondHeight, hash: hashCanvas(laid.canvas) };
 }
 
 export function draw(ctx, state) {
   const { pondWidth, pondHeight } = state.view;
-  if (!built || built.width !== pondWidth || built.height !== pondHeight) rebuild(state);
+  if (built && (built.width !== pondWidth || built.height !== pondHeight)) rebuild(state);
+  if (!built || built.width !== pondWidth || built.height !== pondHeight) {
+    // Before the account is known (or between a resize and its rebuild): the rim color.
+    ctx.fillStyle = `rgb(${EDGE.join(', ')})`;
+    ctx.fillRect(0, 0, pondWidth, pondHeight);
+    return;
+  }
   ctx.drawImage(built.canvas, 0, 0);
 }

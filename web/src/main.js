@@ -16,6 +16,11 @@
 //   pads        pads_json(), parsed ([] until the koi exists)
 //   legend      legend_json(), parsed (null until the koi exists)
 //   snapshot    the parsed snapshot (null until read)
+//   accountId   the account the pond's art is seeded from: null until boot knows it, then
+//               the snapshot's account_id, or 0 when the data could not be read. Seeded
+//               layers (floor, caustics) build nothing while it is null, so the pond is
+//               laid once, for the right account, with no stand-in floor first.
+//   headerHeight  the header strip's height in CSS px, kept current
 //   reducedMotion  prefers-reduced-motion, kept current
 //   now, dt     this frame's rAF time (ms) and step (s, capped at 0.1)
 //   gulped      true on the frame the koi gulps food
@@ -45,7 +50,10 @@
 //   koiPixels()        {count, x, y}: the koi frame's opaque pixels and their centroid,
 //                      in pond pixels
 //   canvasSample()     one hash per row of the visible canvas, to detect change
-//   floorHash          a hash of the floor bitmap's pixels (web/src/floor.js)
+//   floorHash          a hash of the floor bitmap's pixels (web/src/floor.js); stable for
+//                      one browser, not promised across browsers
+//   floorBuilds        floors laid since load
+//   causticBuilds      caustic tile sets built since load
 //   floorSeed          the account_id the floor was laid for (null before the snapshot)
 //   floorDetail        {x, y}: a 160×100 pond-pixel region around a rock group and its bed
 //   floorShape         {bedShare, rockGroups, stones}: how much the plant beds cover, and
@@ -54,10 +62,14 @@
 //   causticMask        the mean strength of the light's patch mask right now (0–1)
 //   causticFrames()    the 16 caustic tiles
 //   causticRegion(frame, width, height)  that frame's light over a larger region
+//   causticLive()      {frame, key, mean}: the live caustic state, to check it is not disturbed
 //   layerMs            per named layer, a running average of its draw time in the frame
 //                      loop (ms; draw calls only, as the canvas may raster later)
-//   layerCost(names, n)  ms a frame for the named layers, drawn n times into a pond-size
-//                      canvas and flushed each time, less the cost of the flush alone
+//   layerCost(names, {runs, count})  {layers, calibration}: ms a frame for the named
+//                      layers drawn `count` times into a pond-size canvas, reading a pixel
+//                      back each time so it rasters, and for one plain pond-size blit
+//                      measured the same way; each the median of `runs` runs after a
+//                      warm-up. Layer state (the live caustics) is saved and restored.
 
 import { computeView } from './view.js';
 import * as koiModule from './koi.js';
@@ -91,6 +103,8 @@ const state = {
   pads: [],
   legend: null,
   snapshot: null,
+  accountId: null,
+  headerHeight: 0,
   reducedMotion: reducedMotionQuery.matches,
   now: 0,
   dt: 0,
@@ -125,6 +139,13 @@ const hooks = {
   wasmMemoryBytes: () => (wasm ? wasm.memory.buffer.byteLength : 0),
   koiPixels: () => koiPixels(),
   canvasSample: () => canvasSample(),
+  get floorBuilds() {
+    return floor.buildCount();
+  },
+  get causticBuilds() {
+    return caustics.buildCount();
+  },
+  causticLive: () => caustics.liveState(),
   get floorHash() {
     return floor.current()?.hash ?? null;
   },
@@ -145,7 +166,7 @@ const hooks = {
     return caustics.currentFrame();
   },
   causticFrames: () => caustics.frames(),
-  causticRegion: (frame, width, height) => caustics.renderRegion(caustics.seedFor(state), frame, width, height),
+  causticRegion: (frame, width, height) => caustics.renderRegion(caustics.seedFor(state) ?? 0, frame, width, height),
   layerMs: {},
   layerCost: (names, count) => layerCost(names, count),
 };
@@ -254,7 +275,10 @@ function watchPixelRatio() {
 }
 
 // The legend sits below the header on desktop, so it never covers the header button.
+// The floor keeps rock groups out from under it, so state carries its height too.
+state.headerHeight = header.offsetHeight;
 new ResizeObserver(() => {
+  state.headerHeight = header.offsetHeight;
   document.documentElement.style.setProperty('--header-height', `${header.offsetHeight}px`);
 }).observe(header);
 
@@ -263,26 +287,48 @@ function timeLayer(name, ms) {
   hooks.layerMs[name] = average === undefined ? ms : average * 0.95 + ms * 0.05;
 }
 
-// Draw the named layers into a pond-size canvas `count` times, reading one pixel back each
-// time so the canvas rasters every frame, and subtract the cost of that read alone.
-function layerCost(names, count) {
+// Per-frame cost of the named layers against one plain pond-size blit, both drawn into a
+// pond-size canvas with a 1 px read-back each time so the canvas rasters every pass. Each
+// figure is the median of `runs` runs after a warm-up; layer state is saved and restored
+// so the live pond is not disturbed.
+function layerCost(names, { runs = 5, count = 60 } = {}) {
   const layers = LAYERS.filter((layer) => names.includes(layer.name));
+  const saved = layers.map((layer) => layer.saveState?.());
   const bench = document.createElement('canvas');
   bench.width = state.view.pondWidth;
   bench.height = state.view.pondHeight;
   const context = bench.getContext('2d');
   context.imageSmoothingEnabled = false;
-  const run = (draw) => {
+  const plain = document.createElement('canvas');
+  plain.width = bench.width;
+  plain.height = bench.height;
+  plain.getContext('2d').fillRect(0, 0, plain.width, plain.height);
+  const time = (draw) => {
     const started = performance.now();
     for (let index = 0; index < count; index += 1) {
-      if (draw) for (const layer of layers) layer.draw(context, state, index * 125);
+      draw(index);
       context.getImageData(index % bench.width, 0, 1, 1);
     }
     return (performance.now() - started) / count;
   };
-  run(true); // warm up
-  const flushOnly = run(false);
-  return Math.max(0, run(true) - flushOnly);
+  const drawLayers = (index) => {
+    for (const layer of layers) layer.draw(context, state, index * 125);
+  };
+  const drawPlain = () => context.drawImage(plain, 0, 0);
+  const median = (values) => values.sort((a, b) => a - b)[Math.floor(values.length / 2)];
+  try {
+    time(drawLayers); // warm up
+    time(drawPlain);
+    const layerRuns = [];
+    const plainRuns = [];
+    for (let run = 0; run < runs; run += 1) {
+      layerRuns.push(time(drawLayers));
+      plainRuns.push(time(drawPlain));
+    }
+    return { layers: median(layerRuns), calibration: median(plainRuns) };
+  } finally {
+    layers.forEach((layer, index) => layer.restoreState?.(saved[index]));
+  }
 }
 
 let lastTime = null;
@@ -351,6 +397,19 @@ async function loadWasm() {
 }
 
 // The koi's seed comes from the account, so a visitor sees the same swim each load.
+// The account the art is seeded from: the snapshot's account_id when it is a usable
+// integer, else 0.
+function accountIdFrom(snapshot) {
+  const id = snapshot?.account_id;
+  return Number.isSafeInteger(id) && id >= 0 ? id : 0;
+}
+
+// Once boot knows the account (or knows it never will), lay the seeded layers.
+function settleAccount(id) {
+  state.accountId = id;
+  rebuildLayers();
+}
+
 function seedFrom(snapshot) {
   const id = snapshot?.account_id;
   return Number.isSafeInteger(id) && id >= 0 ? BigInt(id) : 0n;
@@ -367,9 +426,11 @@ async function boot() {
     state.snapshot = JSON.parse(snapshotJson);
   } catch (error) {
     report('data', DATA_ERROR, error);
+    settleAccount(0);
     await wasmLoad;
     return;
   }
+  settleAccount(accountIdFrom(state.snapshot));
   const loaded = await wasmLoad;
   if (!loaded) return;
   wasm = loaded.exports;

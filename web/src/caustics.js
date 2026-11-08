@@ -101,10 +101,16 @@ function lightAt(list, frame, x, y) {
   return f3 - f1 < 3.4 && swell > 0.3 ? KNOT : LINE;
 }
 
-function render(list, frame, width, height) {
+function toCanvas(image) {
   const canvas = document.createElement('canvas');
-  canvas.width = width;
-  canvas.height = height;
+  canvas.width = image.width;
+  canvas.height = image.height;
+  canvas.getContext('2d').putImageData(image, 0, 0);
+  return canvas;
+}
+
+// The light as straight (not premultiplied) RGBA.
+function renderImage(list, frame, width, height) {
   const image = new ImageData(width, height);
   const data = image.data;
   for (let y = 0; y < height; y += 1) {
@@ -118,49 +124,70 @@ function render(list, frame, width, height) {
       data[index + 3] = alpha;
     }
   }
-  canvas.getContext('2d').putImageData(image, 0, 0);
-  return canvas;
+  return image;
 }
 
 export function renderRegion(seed, frame, width, height) {
-  return render(points(seed), frame, width, height);
+  return toCanvas(renderImage(points(seed), frame, width, height));
+}
+
+function tileImages(seed) {
+  const list = points(seed);
+  return Array.from({ length: FRAMES }, (_, frame) => renderImage(list, frame, TILE, TILE));
 }
 
 export function buildCaustics(seed) {
-  const list = points(seed);
-  return Array.from({ length: FRAMES }, (_, frame) => render(list, frame, TILE, TILE));
+  return tileImages(seed).map(toCanvas);
 }
 
+const EMPTY_LIGHT = { key: null, width: 0, height: 0, runs: [], mean: 0 };
 let built = { seed: null, tiles: [], levels: [], patterns: new WeakMap() };
 let frameShown = 0;
-let light = { key: null, width: 0, height: 0, runs: [], mean: 0 };
+let light = EMPTY_LIGHT;
+let builds = 0;
 
+// Seeded from state.accountId; null (the account not known yet) means no seed.
 export function seedFor(state) {
-  return seedOf(state.snapshot?.account_id ?? 0, SALT);
+  return state.accountId === null || state.accountId === undefined ? null : seedOf(state.accountId, SALT);
 }
 
-// Each frame at each strength: the tile's alpha scaled by level / LEVELS.
-function levelTiles(tiles) {
-  return tiles.map((tile) => {
-    const source = tile.getContext('2d').getImageData(0, 0, TILE, TILE);
-    return Array.from({ length: LEVELS }, (_, index) => {
-      const canvas = document.createElement('canvas');
-      canvas.width = TILE;
-      canvas.height = TILE;
+// Each frame at each strength: the tile's alpha scaled by level / LEVELS, made from the
+// rendered arrays (not read back from a canvas, which would round through premultiplied
+// alpha).
+function levelTiles(images) {
+  return images.map((source) =>
+    Array.from({ length: LEVELS }, (_, index) => {
       const image = new ImageData(new Uint8ClampedArray(source.data), TILE, TILE);
       for (let p = 3; p < image.data.length; p += 4) image.data[p] = Math.round((source.data[p] * (index + 1)) / LEVELS);
-      canvas.getContext('2d').putImageData(image, 0, 0);
-      return canvas;
-    });
-  });
+      return toCanvas(image);
+    }),
+  );
 }
 
 export function rebuild(state) {
   const seed = seedFor(state);
-  if (built.seed === seed) return;
-  const tiles = buildCaustics(seed);
-  built = { seed, tiles, levels: levelTiles(tiles), patterns: new WeakMap() };
-  light = { key: null, width: 0, height: 0, runs: [], mean: 0 };
+  if (seed === null || built.seed === seed) return;
+  const images = tileImages(seed);
+  built = { seed, tiles: images.map(toCanvas), levels: levelTiles(images), patterns: new WeakMap() };
+  light = EMPTY_LIGHT;
+  builds += 1;
+}
+
+export function buildCount() {
+  return builds;
+}
+
+// For measuring without disturbing the live pond (main.js layerCost).
+export function saveState() {
+  return { light, frameShown };
+}
+
+export function restoreState(saved) {
+  ({ light, frameShown } = saved);
+}
+
+export function liveState() {
+  return { frame: frameShown, key: light.key, mean: light.mean };
 }
 
 export function frames() {
@@ -177,8 +204,7 @@ export function maskMean() {
 
 // Light strength in [0, 1] at pond pixel (x, y) and time t (s): soft patches covering
 // a minority of the pond, fading out toward the walls.
-function maskAt(x, y, t, width, height) {
-  const seed = built.seed;
+function maskAt(x, y, t, width, height, seed) {
   const a = noise(x - DRIFT[0][0] * t, y - DRIFT[0][1] * t, 230, seed + 11);
   const b = noise(x - DRIFT[1][0] * t, y - DRIFT[1][1] * t, 140, seed + 12);
   const value = 0.6 * a + 0.4 * b;
@@ -187,8 +213,9 @@ function maskAt(x, y, t, width, height) {
   return patch * patch * Math.max(0, Math.min(1, (wall - 8) / 40));
 }
 
-// The lit runs: [x, y, width, height, level] in pond pixels, inside the 1 px rim.
-function measureLight(width, height, t) {
+// The lit runs: [x, y, width, height, level] in pond pixels, inside the 1 px rim, and the
+// mask's mean strength (0 for a pond too small to hold a cell).
+export function measureLight(width, height, t, seed = built.seed ?? 0) {
   const runs = [];
   let sum = 0;
   let cells = 0;
@@ -197,7 +224,7 @@ function measureLight(width, height, t) {
     let start = 1;
     let current = 0;
     for (let left = 1; left < width - 1; left += MASK_CELL) {
-      const value = maskAt(left + MASK_CELL / 2, top + MASK_CELL / 2, t, width, height);
+      const value = maskAt(left + MASK_CELL / 2, top + MASK_CELL / 2, t, width, height, seed);
       sum += value;
       cells += 1;
       const level = Math.round(value * LEVELS);
@@ -209,11 +236,12 @@ function measureLight(width, height, t) {
     }
     if (current) runs.push([start, top, width - 1 - start, rowHeight, current]);
   }
-  return { runs, mean: sum / cells };
+  return { runs, mean: cells ? sum / cells : 0 };
 }
 
 export function draw(ctx, state, now) {
   if (!built.tiles.length) rebuild(state);
+  if (!built.tiles.length) return; // the account is not known yet
   const { pondWidth, pondHeight } = state.view;
   // Time steps with the frames, so the patches drift in 8 fps steps along with the net.
   const step = state.reducedMotion ? 0 : Math.floor((now * FPS) / 1000);
