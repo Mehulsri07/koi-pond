@@ -37,7 +37,8 @@ const wasm = await init(inline ? { module_or_path: inline.wasmBytes } : undefine
 
 let koi;
 try {
-  koi = new PondKoi(snapshotJson, bodyName, POND_WIDTH, POND_HEIGHT, SEED, totalOverride);
+  koi = new PondKoi(snapshotJson, bodyName, POND_WIDTH, POND_HEIGHT, SEED);
+  if (totalOverride !== undefined) koi.set_growth_override(totalOverride);
 } catch (error) {
   overlay.textContent = `error: ${error.message ?? error}`;
   throw error;

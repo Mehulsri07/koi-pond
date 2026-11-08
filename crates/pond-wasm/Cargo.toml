@@ -9,6 +9,7 @@ description = "A thin wasm-bindgen wrapper that lets the git-koi koi swim in a b
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-git-koi = { git = "https://github.com/Mehulsri07/git-koi", rev = "f41b6ca3b7dd8d7948a29e10708c298bda7ff6e0" }
+git-koi = { git = "https://github.com/Mehulsri07/git-koi", rev = "35a0eb4265bec3a864ba0efc1918252e89bba60b" }
+serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 wasm-bindgen = "0.2"

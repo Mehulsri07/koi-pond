@@ -1,36 +1,169 @@
 {
-  "schema_version": 3,
+  "schema_version": 4,
   "account_id": 1001,
   "repositories": [
     {
       "repository_id": 2001,
       "visibility": "public",
       "is_fork": false,
-      "primary_language": "Rust"
+      "primary_language": "TypeScript"
+    },
+    {
+      "repository_id": 2002,
+      "visibility": "public",
+      "is_fork": false,
+      "primary_language": "Go"
+    },
+    {
+      "repository_id": 2003,
+      "visibility": "public",
+      "is_fork": false,
+      "primary_language": "Python"
+    },
+    {
+      "repository_id": 2004,
+      "visibility": "public",
+      "is_fork": false,
+      "primary_language": "Python"
+    },
+    {
+      "repository_id": 2005,
+      "visibility": "public",
+      "is_fork": false,
+      "primary_language": "Jupyter Notebook"
+    },
+    {
+      "repository_id": 2006,
+      "visibility": "public",
+      "is_fork": false,
+      "primary_language": "HTML"
+    },
+    {
+      "repository_id": 2007,
+      "visibility": "public",
+      "is_fork": false,
+      "primary_language": null
     }
   ],
-  "language_colors": { "Rust": "#dea584" },
+  "language_colors": {
+    "Go": "#00ADD8",
+    "HTML": "#e34c26",
+    "Jupyter Notebook": "#DA5B0B",
+    "Python": "#3572A5",
+    "TypeScript": "#3178c6"
+  },
+  "owned_repositories": [
+    {
+      "repository_id": 2001,
+      "owner_commit_count": 120,
+      "name_with_owner": "Mehulsri07/StrataField"
+    },
+    {
+      "repository_id": 2002,
+      "owner_commit_count": 55,
+      "name_with_owner": "Mehulsri07/LoadLab"
+    },
+    {
+      "repository_id": 2003,
+      "owner_commit_count": 33,
+      "name_with_owner": "Mehulsri07/Horizon-Autoscaler"
+    },
+    {
+      "repository_id": 2004,
+      "owner_commit_count": 15,
+      "name_with_owner": "Mehulsri07/heat-shift-bot"
+    },
+    {
+      "repository_id": 2005,
+      "owner_commit_count": 24,
+      "name_with_owner": "Mehulsri07/Watermarking-cnn"
+    },
+    {
+      "repository_id": 2006,
+      "owner_commit_count": 6,
+      "name_with_owner": "Mehulsri07/Portfolio-Moon"
+    },
+    {
+      "repository_id": 2007,
+      "owner_commit_count": 3,
+      "name_with_owner": "Mehulsri07/notes"
+    }
+  ],
   "contribution_history": {
     "observed_on": "2026-01-06",
     "days": [
-      { "date": "2025-12-20", "contribution_count": 1 },
-      { "date": "2025-12-21", "contribution_count": 0 },
-      { "date": "2025-12-22", "contribution_count": 2 },
-      { "date": "2025-12-23", "contribution_count": 0 },
-      { "date": "2025-12-24", "contribution_count": 3 },
-      { "date": "2025-12-25", "contribution_count": 0 },
-      { "date": "2025-12-26", "contribution_count": 0 },
-      { "date": "2025-12-27", "contribution_count": 0 },
-      { "date": "2025-12-28", "contribution_count": 1 },
-      { "date": "2025-12-29", "contribution_count": 0 },
-      { "date": "2025-12-30", "contribution_count": 0 },
-      { "date": "2025-12-31", "contribution_count": 0 },
-      { "date": "2026-01-01", "contribution_count": 0 },
-      { "date": "2026-01-02", "contribution_count": 0 },
-      { "date": "2026-01-03", "contribution_count": 0 },
-      { "date": "2026-01-04", "contribution_count": 0 },
-      { "date": "2026-01-05", "contribution_count": 5 },
-      { "date": "2026-01-06", "contribution_count": 2 }
+      {
+        "date": "2025-12-20",
+        "contribution_count": 1
+      },
+      {
+        "date": "2025-12-21",
+        "contribution_count": 0
+      },
+      {
+        "date": "2025-12-22",
+        "contribution_count": 2
+      },
+      {
+        "date": "2025-12-23",
+        "contribution_count": 0
+      },
+      {
+        "date": "2025-12-24",
+        "contribution_count": 3
+      },
+      {
+        "date": "2025-12-25",
+        "contribution_count": 0
+      },
+      {
+        "date": "2025-12-26",
+        "contribution_count": 0
+      },
+      {
+        "date": "2025-12-27",
+        "contribution_count": 0
+      },
+      {
+        "date": "2025-12-28",
+        "contribution_count": 1
+      },
+      {
+        "date": "2025-12-29",
+        "contribution_count": 0
+      },
+      {
+        "date": "2025-12-30",
+        "contribution_count": 0
+      },
+      {
+        "date": "2025-12-31",
+        "contribution_count": 0
+      },
+      {
+        "date": "2026-01-01",
+        "contribution_count": 0
+      },
+      {
+        "date": "2026-01-02",
+        "contribution_count": 0
+      },
+      {
+        "date": "2026-01-03",
+        "contribution_count": 0
+      },
+      {
+        "date": "2026-01-04",
+        "contribution_count": 0
+      },
+      {
+        "date": "2026-01-05",
+        "contribution_count": 5
+      },
+      {
+        "date": "2026-01-06",
+        "contribution_count": 2
+      }
     ]
   }
 }

@@ -6,13 +6,20 @@
 //! fresh bitmap. The bitmap stays inside the WebAssembly memory; the page reads it through
 //! [`PondKoi::pixels_ptr`] and [`PondKoi::pixels_len`] without copying.
 
-use git_koi::behavior::{Behavior, select_behavior};
+use git_koi::behavior::{Behavior, BehaviorReason, explain_behavior};
 use git_koi::coat::KoiBody;
 use git_koi::history::AccountSnapshot;
-use git_koi::koi::derive_koi_development;
+use git_koi::koi::{KoiDevelopment, derive_koi_development};
+use git_koi::pond::layout_pond;
 use git_koi::render::{FreeFrame, KoiRenderer};
 use git_koi::swim::{Pond, SwimEvent, SwimState};
 use wasm_bindgen::prelude::*;
+
+mod legend;
+mod pads;
+
+use legend::{behavior_name, legend_from};
+use pads::{PadView, pads_from, rest_point};
 
 /// The body names the git-koi command accepts (src/main.rs BODY_NAMES).
 const BODY_NAMES: [(&str, KoiBody); 6] = [
@@ -24,46 +31,42 @@ const BODY_NAMES: [(&str, KoiBody); 6] = [
     ("platinum", KoiBody::Platinum),
 ];
 
-/// One koi in one pond: its renderer, its swim state, the day's behavior, the food in
-/// the water, and the frame last rendered.
+/// One koi in one pond: its development, renderer, swim state, the day's behavior, the pads,
+/// the food in the water, and the frame last rendered.
 #[wasm_bindgen]
 pub struct PondKoi {
+    koi_development: KoiDevelopment,
+    koi_body: KoiBody,
+    seed: u64,
+    pond: Pond,
     koi_renderer: KoiRenderer,
     swim_state: SwimState,
     behavior: Behavior,
+    behavior_reason: BehaviorReason,
+    pads: Vec<PadView>,
     food: Option<[f64; 2]>,
     free_frame: FreeFrame,
 }
 
 #[wasm_bindgen]
 impl PondKoi {
-    /// Develop a koi from an account snapshot (git-koi's JSON format) and put it in a
-    /// pond of the given size, resting at the pond's center. `body` is one of white,
-    /// black, asagi, tea, gold, platinum. `total_override`, when given, replaces the
-    /// snapshot's total contributions, so tests can see every growth stage; it must be a
-    /// finite, non-negative number and is truncated to a whole count. The first frame is
-    /// rendered here, so the pixel accessors are valid from the start.
+    /// Develop a koi from an account snapshot (git-koi's version 4 JSON format), lay out
+    /// its pads in a pond of the given size in pond pixels, and put the koi at rest just
+    /// below the biggest pad (at the pond's center when there are no pads). `body` is one of
+    /// white, black, asagi, tea, gold, platinum. The first frame is rendered here, so the
+    /// pixel accessors are valid from the start.
     #[wasm_bindgen(constructor)]
     pub fn new(
         snapshot_json: &str,
         body: &str,
-        pond_width: f64,
-        pond_height: f64,
+        pond_width: u32,
+        pond_height: u32,
         seed: u64,
-        total_override: Option<f64>,
     ) -> Result<PondKoi, JsError> {
         let account_snapshot: AccountSnapshot = serde_json::from_str(snapshot_json)
             .map_err(|error| JsError::new(&format!("invalid snapshot: {error}")))?;
-        let mut koi_development = derive_koi_development(&account_snapshot)
+        let koi_development = derive_koi_development(&account_snapshot)
             .map_err(|error| JsError::new(&format!("cannot develop a koi: {error:?}")))?;
-        if let Some(total) = total_override {
-            if !total.is_finite() || total < 0.0 {
-                return Err(JsError::new(
-                    "total_override must be a finite, non-negative number",
-                ));
-            }
-            koi_development.total_contributions = total as u64;
-        }
         let koi_body = BODY_NAMES
             .iter()
             .find(|(name, _)| *name == body)
@@ -73,22 +76,65 @@ impl PondKoi {
                     "unknown body {body:?}; expected white, black, asagi, tea, gold, or platinum"
                 ))
             })?;
-        let behavior = select_behavior(&koi_development);
-        let koi_renderer = KoiRenderer::new(&koi_development, koi_body);
+        let layout = layout_pond(&account_snapshot, pond_width, pond_height)
+            .map_err(|error| JsError::new(&error.to_string()))?;
+        let pads = pads_from(&account_snapshot, &layout);
+        let (behavior, behavior_reason) = explain_behavior(&koi_development);
         let pond = Pond {
-            width_pixels: pond_width,
-            height_pixels: pond_height,
-            rest_point: [pond_width / 2.0, pond_height / 2.0],
+            width_pixels: f64::from(pond_width),
+            height_pixels: f64::from(pond_height),
+            rest_point: rest_point(&pads, pond_width, pond_height),
         };
+        let koi_renderer = KoiRenderer::new(&koi_development, koi_body);
         let swim_state = SwimState::new(seed, pond, koi_renderer.body_length_pixels());
         let free_frame = koi_renderer.render_free_frame(&swim_state, behavior);
         Ok(PondKoi {
+            koi_development,
+            koi_body,
+            seed,
+            pond,
             koi_renderer,
             swim_state,
             behavior,
+            behavior_reason,
+            pads,
             food: None,
             free_frame,
         })
+    }
+
+    /// For testing: replace the snapshot's total contributions so every growth stage can be
+    /// seen. The koi regrows to that size and starts its swim again from the rest point;
+    /// the legend's total and growth stage follow. Negative and non-finite totals are
+    /// ignored; others are truncated to a whole count.
+    pub fn set_growth_override(&mut self, total: f64) {
+        if !total.is_finite() || total < 0.0 {
+            return;
+        }
+        self.koi_development.total_contributions = total as u64;
+        self.koi_renderer = KoiRenderer::new(&self.koi_development, self.koi_body);
+        self.swim_state =
+            SwimState::new(self.seed, self.pond, self.koi_renderer.body_length_pixels());
+        self.render();
+    }
+
+    /// The pads as a JSON array of `{repo, url, language, languageColor, commits, size,
+    /// diameter, bloom, x, y, notch}`.
+    pub fn pads_json(&self) -> String {
+        serde_json::to_string(&self.pads).expect("pads serialize")
+    }
+
+    /// The legend as JSON: `{observedOn, totalContributions, growthStage, behavior,
+    /// reason: {rule, value}, languages: [{name, color, share}], padCount}`. The page adds
+    /// the render mode itself.
+    pub fn legend_json(&self) -> String {
+        let legend = legend_from(
+            &self.koi_development,
+            self.behavior,
+            self.behavior_reason,
+            self.pads.len(),
+        );
+        serde_json::to_string(&legend).expect("legend serializes")
     }
 
     /// Put food at a pond point, replacing any food already there.
@@ -148,14 +194,7 @@ impl PondKoi {
 
     /// The day's behavior, in the words the git-koi command prints.
     pub fn behavior(&self) -> String {
-        match self.behavior {
-            Behavior::DeepRest => "deep rest",
-            Behavior::Rest => "rest",
-            Behavior::SurfaceFeeding => "surface feeding",
-            Behavior::Dart => "dart",
-            Behavior::Cruise => "cruise",
-        }
-        .to_string()
+        behavior_name(self.behavior).to_string()
     }
 
     /// The koi's body length from snout to tail stalk in pond pixels, tail fin excluded.
@@ -176,5 +215,31 @@ impl PondKoi {
     /// Whether food is in the water.
     pub fn has_food(&self) -> bool {
         self.food.is_some()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const FIXTURE: &str = include_str!("../../../web/fixtures/snapshot.json");
+
+    #[test]
+    fn tiny_ponds_build_a_koi_without_panicking() {
+        for (width, height) in [(10, 10), (0, 0), (30, 300)] {
+            let koi = PondKoi::new(FIXTURE, "gold", width, height, 7)
+                .ok()
+                .unwrap();
+            assert!(koi.pads_json().starts_with('['));
+        }
+    }
+
+    #[test]
+    fn the_growth_override_moves_the_legend() {
+        let mut koi = PondKoi::new(FIXTURE, "gold", 640, 360, 7).ok().unwrap();
+        koi.set_growth_override(2000.0);
+        let legend: serde_json::Value = serde_json::from_str(&koi.legend_json()).unwrap();
+        assert_eq!(legend["growthStage"], "juvenile");
+        assert_eq!(legend["totalContributions"], 2000);
     }
 }

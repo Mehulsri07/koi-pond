@@ -83,7 +83,7 @@ dependencies = [
 [[package]]
 name = "git-koi"
 version = "1.0.2"
-source = "git+https://github.com/Mehulsri07/git-koi?rev=f41b6ca3b7dd8d7948a29e10708c298bda7ff6e0#f41b6ca3b7dd8d7948a29e10708c298bda7ff6e0"
+source = "git+https://github.com/Mehulsri07/git-koi?rev=35a0eb4265bec3a864ba0efc1918252e89bba60b#35a0eb4265bec3a864ba0efc1918252e89bba60b"
 dependencies = [
  "chrono",
  "gif",
@@ -151,6 +151,7 @@ name = "pond-wasm"
 version = "0.1.0"
 dependencies = [
  "git-koi",
+ "serde",
  "serde_json",
  "wasm-bindgen",
 ]
