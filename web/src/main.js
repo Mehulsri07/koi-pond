@@ -47,8 +47,11 @@
 //   canvasSample()     one hash per row of the visible canvas, to detect change
 //   floorHash          a hash of the floor bitmap's pixels (web/src/floor.js)
 //   floorSeed          the account_id the floor was laid for (null before the snapshot)
-//   floorDetail        {x, y}: a 160×100 pond-pixel region with a rock and a plant clump
+//   floorDetail        {x, y}: a 160×100 pond-pixel region around a rock group and its bed
+//   floorShape         {bedShare, rockGroups, stones}: how much the plant beds cover, and
+//                      the rock groups and stones laid
 //   causticFrame       the caustic frame drawn last (web/src/caustics.js)
+//   causticMask        the mean strength of the light's patch mask right now (0–1)
 //   causticFrames()    the 16 caustic tiles
 //   causticRegion(frame, width, height)  that frame's light over a larger region
 //   layerMs            per named layer, a running average of its draw time in the frame
@@ -130,6 +133,13 @@ const hooks = {
   },
   get floorDetail() {
     return floor.current()?.detail ?? null;
+  },
+  get floorShape() {
+    const built = floor.current();
+    return built ? { bedShare: built.bedShare, rockGroups: built.rockGroups, stones: built.stones } : null;
+  },
+  get causticMask() {
+    return caustics.maskMean();
   },
   get causticFrame() {
     return caustics.currentFrame();

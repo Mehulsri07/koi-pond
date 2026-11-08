@@ -491,9 +491,29 @@ check('caustics tile seamlessly', ['desktop'], async ({ page, open }) => {
   });
   assert.equal(result.count, 16);
   assert.deepEqual(result.problems, []);
-  assert.ok(result.maxAlpha <= Math.floor(0.18 * 255), `caustic alpha ${result.maxAlpha} is at most 0.18`);
+  assert.ok(result.maxAlpha <= Math.floor(0.1 * 255), `caustic alpha ${result.maxAlpha} is at most 0.10`);
   const share = result.lit / (16 * 64 * 64);
   assert.ok(share > 0.05 && share < 0.4, `caustics light ${(share * 100).toFixed(1)}% of the tile`);
+});
+
+check('the light falls in drifting patches', ['desktop'], async ({ page, open }) => {
+  assert.equal(await open(), null);
+  const means = [];
+  for (let index = 0; index < 6; index += 1) {
+    await page.waitForTimeout(300);
+    means.push(await page.evaluate(() => window.__pond.causticMask));
+  }
+  for (const mean of means) assert.ok(mean > 0.02 && mean < 0.3, `mask mean ${mean.toFixed(3)}: some light, most of the pond dark`);
+  assert.ok(new Set(means).size > 1, 'the patches drift');
+});
+
+check('the banks hold the plants and rocks', BOTH, async ({ page, open }) => {
+  assert.equal(await open(), null);
+  await floorHashAfterBoot(page);
+  const shape = await page.evaluate(() => window.__pond.floorShape);
+  assert.ok(shape.bedShare >= 0.06 && shape.bedShare <= 0.12, `plant beds cover ${(shape.bedShare * 100).toFixed(1)}% of the pond`);
+  assert.ok(shape.rockGroups >= 2 && shape.rockGroups <= 4, `${shape.rockGroups} rock groups`);
+  assert.ok(shape.stones >= 3 * shape.rockGroups && shape.stones <= 6 * shape.rockGroups, `${shape.stones} stones`);
 });
 
 check('reduced motion holds the caustics', ['desktop'], async ({ page, open }) => {
@@ -510,6 +530,12 @@ check('reduced motion holds the caustics', ['desktop'], async ({ page, open }) =
   await page.emulateMedia({ reducedMotion: 'reduce' });
   await page.waitForTimeout(100);
   assert.deepEqual(await watch(), [0], 'reduced motion holds frame 0');
+  const masks = new Set();
+  for (let index = 0; index < 4; index += 1) {
+    masks.add(await page.evaluate(() => window.__pond.causticMask));
+    await page.waitForTimeout(200);
+  }
+  assert.equal(masks.size, 1, 'reduced motion holds the light patches still');
   assert.equal(await open(), null);
   assert.deepEqual(await watch(), [0], 'reduced motion from the start holds frame 0');
 });

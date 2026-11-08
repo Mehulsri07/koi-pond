@@ -1,21 +1,33 @@
-// The caustics layer: a wobbly net of light, as sunlight through the ripples above.
+// The caustics layer: soft drifting patches of sunlight through the ripples above.
 //
 //   buildCaustics(seed) -> HTMLCanvasElement[16]   64×64 tiles, tileable at their edges
 //   renderRegion(seed, frame, width, height)       the same light over any region, for tests
 //   draw(ctx, state, now) / rebuild(state)          the layer contract (web/src/main.js)
 //   currentFrame()                                  the frame drawn last
+//   maskMean()                                      the mean strength of the light mask now
 //
 // The net is the edges of a Worley (cellular) pattern on a 64×64 torus: a pixel is lit
 // where its nearest two feature points are almost equally near (F2 − F1 small). Each
 // point circles once per 16 frames and the domain is warped by sines of whole periods,
 // so the pattern repeats exactly every 64 px and every 16 frames. Strands are about 1 px
-// wide, in three hard levels (no smoothing), all at most 0.18 alpha: a slow swell dims
-// some strands to a trace, and the brightest marks knots where three cells meet. Frames advance at 8 fps and hold frame 0 under reduced motion.
+// wide, in three hard levels (no smoothing), all at most 0.09 alpha: a slow swell dims
+// some strands to a trace, and the brightest marks knots where three cells meet.
+//
+// The net is only seen through a mask: two layers of large value noise drifting in
+// different directions, thresholded so most of the pond is dark at any moment and the
+// light falls in soft patches that wander; this also hides the 64 px repeat. Each tile
+// is precomputed at LEVELS strengths. Each time the frame changes (8 fps) the mask is
+// sampled once per MASK_CELL square, quantized to a level, and each row merged into runs
+// of one level; every frame then fills only the lit runs with that level's pattern. A
+// lit strand stays one hard pixel, and neighbouring cells differ by one level (about
+// 4/255 alpha at most), too little to see. Only source-over fills are used: other composite
+// modes cost several ms a frame in software rasterizers. Under reduced motion the frame
+// and the mask both hold still.
 //
 // The outermost pond pixel ring is left unlit so the page edge (sampled from the
 // bottom-right pixel) keeps one steady color.
 
-import { createRandom, seedOf } from './rand.js';
+import { createRandom, noise, seedOf } from './rand.js';
 
 export const name = 'caustics';
 export const TILE = 64;
@@ -24,10 +36,14 @@ export const FPS = 8;
 const SALT = 0xca057;
 const GRID = 3; // feature points on a jittered 3×3 grid: cells about 21 px across
 const LIGHT = [220, 255, 236];
-// Alphas out of 255; 0.18 × 255 = 45.9.
-const KNOT = 40;
-const LINE = 24;
-const FAINT = 11;
+// Alphas out of 255; 0.09 × 255 = 22.95.
+const KNOT = 22;
+const LINE = 14;
+const FAINT = 7;
+const MASK_CELL = 24;
+const LEVELS = 6;
+// Mask drift in pond px a second, for its two noise layers.
+const DRIFT = [[5, 2.5], [-3.5, 4]];
 const WARP = 1.4;
 
 function points(seed) {
@@ -115,17 +131,36 @@ export function buildCaustics(seed) {
   return Array.from({ length: FRAMES }, (_, frame) => render(list, frame, TILE, TILE));
 }
 
-let built = { seed: null, tiles: [], patterns: new WeakMap() };
+let built = { seed: null, tiles: [], levels: [], patterns: new WeakMap() };
 let frameShown = 0;
+let light = { key: null, width: 0, height: 0, runs: [], mean: 0 };
 
 export function seedFor(state) {
   return seedOf(state.snapshot?.account_id ?? 0, SALT);
 }
 
+// Each frame at each strength: the tile's alpha scaled by level / LEVELS.
+function levelTiles(tiles) {
+  return tiles.map((tile) => {
+    const source = tile.getContext('2d').getImageData(0, 0, TILE, TILE);
+    return Array.from({ length: LEVELS }, (_, index) => {
+      const canvas = document.createElement('canvas');
+      canvas.width = TILE;
+      canvas.height = TILE;
+      const image = new ImageData(new Uint8ClampedArray(source.data), TILE, TILE);
+      for (let p = 3; p < image.data.length; p += 4) image.data[p] = Math.round((source.data[p] * (index + 1)) / LEVELS);
+      canvas.getContext('2d').putImageData(image, 0, 0);
+      return canvas;
+    });
+  });
+}
+
 export function rebuild(state) {
   const seed = seedFor(state);
   if (built.seed === seed) return;
-  built = { seed, tiles: buildCaustics(seed), patterns: new WeakMap() };
+  const tiles = buildCaustics(seed);
+  built = { seed, tiles, levels: levelTiles(tiles), patterns: new WeakMap() };
+  light = { key: null, width: 0, height: 0, runs: [], mean: 0 };
 }
 
 export function frames() {
@@ -136,15 +171,64 @@ export function currentFrame() {
   return frameShown;
 }
 
+export function maskMean() {
+  return light.mean;
+}
+
+// Light strength in [0, 1] at pond pixel (x, y) and time t (s): soft patches covering
+// a minority of the pond, fading out toward the walls.
+function maskAt(x, y, t, width, height) {
+  const seed = built.seed;
+  const a = noise(x - DRIFT[0][0] * t, y - DRIFT[0][1] * t, 230, seed + 11);
+  const b = noise(x - DRIFT[1][0] * t, y - DRIFT[1][1] * t, 140, seed + 12);
+  const value = 0.6 * a + 0.4 * b;
+  const patch = Math.max(0, Math.min(1, (value - 0.52) / 0.2));
+  const wall = Math.min(x, y, width - x, height - y);
+  return patch * patch * Math.max(0, Math.min(1, (wall - 8) / 40));
+}
+
+// The lit runs: [x, y, width, height, level] in pond pixels, inside the 1 px rim.
+function measureLight(width, height, t) {
+  const runs = [];
+  let sum = 0;
+  let cells = 0;
+  for (let top = 1; top < height - 1; top += MASK_CELL) {
+    const rowHeight = Math.min(MASK_CELL, height - 1 - top);
+    let start = 1;
+    let current = 0;
+    for (let left = 1; left < width - 1; left += MASK_CELL) {
+      const value = maskAt(left + MASK_CELL / 2, top + MASK_CELL / 2, t, width, height);
+      sum += value;
+      cells += 1;
+      const level = Math.round(value * LEVELS);
+      if (level !== current) {
+        if (current) runs.push([start, top, left - start, rowHeight, current]);
+        start = left;
+        current = level;
+      }
+    }
+    if (current) runs.push([start, top, width - 1 - start, rowHeight, current]);
+  }
+  return { runs, mean: sum / cells };
+}
+
 export function draw(ctx, state, now) {
   if (!built.tiles.length) rebuild(state);
+  const { pondWidth, pondHeight } = state.view;
+  // Time steps with the frames, so the patches drift in 8 fps steps along with the net.
+  const step = state.reducedMotion ? 0 : Math.floor((now * FPS) / 1000);
+  frameShown = step % FRAMES;
+  if (light.key !== step || light.width !== pondWidth || light.height !== pondHeight) {
+    light = { key: step, width: pondWidth, height: pondHeight, ...measureLight(pondWidth, pondHeight, step / FPS) };
+  }
   let patterns = built.patterns.get(ctx);
   if (!patterns) {
-    patterns = built.tiles.map((tile) => ctx.createPattern(tile, 'repeat'));
+    patterns = built.levels.map((levels) => levels.map((tile) => ctx.createPattern(tile, 'repeat')));
     built.patterns.set(ctx, patterns);
   }
-  frameShown = state.reducedMotion ? 0 : Math.floor((now * FPS) / 1000) % FRAMES;
-  const { pondWidth, pondHeight } = state.view;
-  ctx.fillStyle = patterns[frameShown];
-  ctx.fillRect(1, 1, pondWidth - 2, pondHeight - 2);
+  const levels = patterns[frameShown];
+  for (const [x, y, width, height, level] of light.runs) {
+    ctx.fillStyle = levels[level - 1];
+    ctx.fillRect(x, y, width, height);
+  }
 }
