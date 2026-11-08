@@ -95,6 +95,7 @@ pub fn pads_from(account_snapshot: &AccountSnapshot, layout: &PondLayout) -> Vec
 fn is_plain_name(name_with_owner: &str) -> bool {
     let is_part = |part: &str| {
         !part.is_empty()
+            && !part.bytes().all(|byte| byte == b'.')
             && part
                 .bytes()
                 .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
@@ -224,12 +225,24 @@ mod tests {
     }
 
     #[test]
+    fn dot_only_name_parts_get_no_link() {
+        for name in ["../x", "x/..", "./.", "/x", "x/"] {
+            let mut snapshot: AccountSnapshot = serde_json::from_str(FIXTURE).unwrap();
+            snapshot.owned_repositories.as_mut().unwrap()[0].name_with_owner = name.to_owned();
+            let layout = layout_pond(&snapshot, 640, 360).unwrap();
+            let pads = pads_from(&snapshot, &layout);
+            let pad = pads.iter().find(|pad| pad.repo == name).unwrap();
+            assert_eq!(pad.url, None, "{name}");
+        }
+    }
+
+    #[test]
     fn duplicate_owned_entries_agree_on_commits_and_size() {
         let mut snapshot: AccountSnapshot = serde_json::from_str(FIXTURE).unwrap();
         let owned = snapshot.owned_repositories.as_mut().unwrap();
         let mut twin = owned[0].clone();
         twin.owner_commit_count = 5;
-        owned.push(twin);
+        owned.insert(0, twin);
         let layout = layout_pond(&snapshot, 640, 360).unwrap();
         let pads = pads_from(&snapshot, &layout);
         let strata = pads
