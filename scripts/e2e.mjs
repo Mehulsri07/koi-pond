@@ -39,6 +39,8 @@ const SCREENSHOTS = {
   card: join(SCREENSHOT_DIR, 'site-pads-card.png'),
   // A 160×100 pond-pixel crop around a rock and a plant clump, at 4× so pixels can be judged.
   detail: join(SCREENSHOT_DIR, 'site-floor-detail.png'),
+  // Food on the water with a ripple, the koi heading to it.
+  feed: join(SCREENSHOT_DIR, 'site-feed-desktop.png'),
 };
 
 // Pre-flight: without the wasm build every page check would only time out.
@@ -978,6 +980,129 @@ check('a sprite that fails once loads on the next rebuild', ['desktop'], async (
 });
 
 // ---------------------------------------------------------------------------------------
+// Feeding, ripples, adaptive koi drawing (Task 8).
+
+// A click on open water; returns the pond pixel it landed on.
+async function clickWater(page, targets) {
+  const point = clientPoint(targets.view, targets.water);
+  await page.mouse.click(point.x, point.y);
+  return targets.water;
+}
+
+check('the koi eats what you drop', ['desktop'], async ({ page, errors, open }) => {
+  assert.equal(await open(), null);
+  const targets = await padTargets(page);
+  const water = await clickWater(page, targets);
+  const ring = await page.evaluate(() => window.__pond.ripples().filter((r) => r.kind === 'drop'));
+  assert.equal(ring.length, 1, 'a drop ripple appears on the tap');
+  assert.deepEqual([ring[0].x, ring[0].y], [water.x, water.y], 'at the drop point');
+  assert.deepEqual(await page.evaluate(() => window.__pond.state.food), { x: water.x + 0.5, y: water.y + 0.5 });
+  await page.waitForFunction(() => window.__pond.foodDrawn(), null, { timeout: 2000 });
+  // The gulp: a ring at the food point, and the food sprite gone.
+  await page.waitForFunction(() => window.__pond.ripples().some((r) => r.kind === 'gulp'), null, { timeout: 30000, polling: 20 });
+  const after = await page.evaluate(() => ({
+    gulp: window.__pond.ripples().find((r) => r.kind === 'gulp'),
+    food: window.__pond.state.food,
+    hasFood: window.__pond.state.koi.instance.has_food(),
+  }));
+  assert.deepEqual([after.gulp.x, after.gulp.y], [water.x, water.y], 'the gulp ripple is at the food point');
+  assert.equal(after.food, null);
+  assert.equal(after.hasFood, false);
+  await page.waitForFunction(() => !window.__pond.foodDrawn(), null, { timeout: 2000 });
+  assert.deepEqual(errors, []);
+});
+
+check('a new tap moves the food', ['desktop'], async ({ page, errors, open }) => {
+  assert.equal(await open(), null);
+  const targets = await padTargets(page);
+  const first = await clickWater(page, targets);
+  const second = { x: first.x + 6, y: first.y - 6 };
+  const point = clientPoint(targets.view, second);
+  await page.mouse.click(point.x, point.y);
+  const food = await page.evaluate(() => window.__pond.state.food);
+  assert.deepEqual(food, { x: second.x + 0.5, y: second.y + 0.5 }, 'one food, at the latest tap');
+  assert.equal(await page.evaluate(() => window.__pond.rippleCounts().drop), 2);
+  assert.deepEqual(errors, []);
+});
+
+check('tapping a pad ripples the pad and drops no food', ['desktop'], async ({ page, errors, open }) => {
+  assert.equal(await open(), null);
+  const targets = await padTargets(page);
+  const pad = reachable(targets)[0];
+  const point = clientPoint(targets.view, pad.inside);
+  page.context().on('page', (popup) => popup.close());
+  await page.mouse.click(point.x, point.y);
+  const state = await page.evaluate(() => ({
+    rings: window.__pond.ripples(),
+    counts: window.__pond.rippleCounts(),
+    food: window.__pond.state.food,
+    drops: window.__pond.foodDrops,
+  }));
+  assert.deepEqual(state.counts, { drop: 0, gulp: 0, pad: 1 });
+  assert.equal(state.rings[0].kind, 'pad');
+  assert.deepEqual([state.rings[0].x, state.rings[0].y], [pad.inside.x, pad.inside.y]);
+  assert.equal(state.food, null);
+  assert.equal(state.drops, 0);
+  assert.deepEqual(errors, []);
+});
+
+check('reduced motion shows one static ring', ['desktop'], async ({ page, errors, open }) => {
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  assert.equal(await open(), null);
+  const targets = await padTargets(page);
+  const water = await clickWater(page, targets);
+  // The display pixel at pond pixel (x, y), as rgb text.
+  const pixel = (x, y) =>
+    page.evaluate(({ x, y }) => {
+      const canvas = document.getElementById('pond');
+      const view = window.__pond.view;
+      const k = canvas.width / view.pondWidth;
+      const [r, g, b] = canvas.getContext('2d').getImageData(Math.floor((x + 0.5) * k), Math.floor((y + 0.5) * k), 1, 1).data;
+      return `${r},${g},${b}`;
+    }, { x, y });
+  const ring = '168,227,230';
+  await page.waitForFunction(() => window.__pond.frames > 0);
+  await page.waitForTimeout(60);
+  assert.equal(await pixel(water.x + 8, water.y), ring, 'a ring at its fixed radius at once');
+  await page.waitForTimeout(150);
+  assert.equal(await pixel(water.x + 8, water.y), ring, 'and still there, not spreading');
+  assert.notEqual(await pixel(water.x + 20, water.y), ring);
+  await page.waitForTimeout(500);
+  assert.notEqual(await pixel(water.x + 8, water.y), ring, 'gone after 0.4 s');
+  assert.deepEqual(errors, []);
+});
+
+check('ripples spread at 24 px a second and cap at 12', ['desktop'], async ({ page, errors, open }) => {
+  assert.equal(await open(), null);
+  await page.evaluate(() => {
+    const ripples = window.__pond.layers.find((layer) => layer.name === 'ripples');
+    for (let index = 0; index < 20; index += 1) ripples.add(40 + index, 60, 'pad');
+  });
+  assert.equal(await page.evaluate(() => window.__pond.ripples().length), 12, 'capped');
+  assert.deepEqual(errors, []);
+});
+
+check('slow devices draw the koi less often', ['desktop'], async ({ page, errors, open }) => {
+  assert.equal(await open('?fixture&slowKoi=15'), null);
+  assert.equal(await page.evaluate(() => window.__pond.renderMode), 'every-frame', 'measuring first');
+  await page.waitForFunction(() => window.__pond.renderMode === '20-per-second', null, { timeout: 10000 });
+  // Frames still run, and the koi still moves.
+  const first = await page.evaluate(() => ({ frames: window.__pond.frames, ...window.__pond.koiPixels() }));
+  await page.waitForTimeout(1000);
+  const second = await page.evaluate(() => ({ frames: window.__pond.frames, ...window.__pond.koiPixels() }));
+  assert.ok(second.frames - first.frames >= 10, 'the pond keeps drawing');
+  assert.ok(second.x !== first.x || second.y !== first.y, 'the koi keeps moving');
+  assert.deepEqual(errors, []);
+});
+
+check('a quick koi is drawn every frame', ['desktop'], async ({ page, errors, open }) => {
+  assert.equal(await open(), null);
+  await page.waitForTimeout(2600);
+  assert.equal(await page.evaluate(() => window.__pond.renderMode), 'every-frame');
+  assert.deepEqual(errors, []);
+});
+
+// ---------------------------------------------------------------------------------------
 
 const only = argument('--only');
 const server = await serve();
@@ -1045,6 +1170,28 @@ if (!only) {
     } finally {
       await session.context.close();
     }
+  }
+  const feedSession = await newPage('desktop');
+  try {
+    assert.equal(await feedSession.open(), null);
+    const targets = await padTargets(feedSession.page);
+    await feedSession.page.waitForTimeout(1000);
+    // Open water a little right of and below the pond's middle, where the koi swims.
+    const middle = await feedSession.page.evaluate(() => {
+      const { width, height, mask } = window.__pond.padMask();
+      const x = Math.round(width * 0.62);
+      for (let y = Math.round(height * 0.6); y < height; y += 1) if (mask[y * width + x] === 0) return { x, y };
+      return null;
+    });
+    await clickWater(feedSession.page, { ...targets, water: middle ?? targets.water });
+    await feedSession.page.waitForTimeout(350);
+    await feedSession.page.screenshot({ path: SCREENSHOTS.feed });
+    console.log(`screenshot: ${SCREENSHOTS.feed}`);
+  } catch (error) {
+    failed += 1;
+    console.log(`FAIL  screenshot [feed]\n      ${error.message ?? error}`);
+  } finally {
+    await feedSession.context.close();
   }
   // The detail crop: a 4× context, clipped to the region floor.js names (a rock beside a
   // plant clump, away from the header).

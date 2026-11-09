@@ -45,6 +45,8 @@
 //   - Touch: the first tap on a pad shows its card, which takes taps (its "Open repo"
 //     link); a tap anywhere else hides it.
 //   - Any rebuild of the layer (or a resize) hides the card.
+//   - A click or tap on a pad (even one that only shows its card) calls onPadTap(x, y) in
+//     pond pixels, for the pad ripple.
 //   - A click or tap on water calls onWaterTap(x, y) in pond pixels; one on a pad never
 //     does.
 import { createRandom, seedOf } from './rand.js';
@@ -382,7 +384,7 @@ export function padAt(x, y) {
 // ---------------------------------------------------------------------------------------
 // Input.
 
-export function attachInput(canvas, { getState, onWaterTap, card }) {
+export function attachInput(canvas, { getState, onWaterTap, onPadTap = () => {}, card }) {
   let pointerType = 'mouse';
   let hovered = null;
 
@@ -428,6 +430,7 @@ export function attachInput(canvas, { getState, onWaterTap, card }) {
     const type = event.pointerType || pointerType;
     const { x, y } = pondPoint(event);
     const pad = padAt(x, y);
+    if (pad) onPadTap(Math.floor(x), Math.floor(y));
     if (type === 'touch') {
       if (pad) {
         if (card.shownFor() !== pad) card.show(pad, event.clientX, event.clientY, { interactive: true });

@@ -24,6 +24,8 @@
 //   reducedMotion  prefers-reduced-motion, kept current
 //   now, dt     this frame's rAF time (ms) and step (s, capped at 0.1)
 //   gulped      true on the frame the koi gulps food
+//   food        {x, y}: the food pellet's pond pixel, or null (cleared on the gulp frame)
+//   renderMode  the koi's drawing mode, "every-frame" or "20-per-second" (for the legend)
 //
 // Failures stay local. A layer whose draw or rebuild throws is switched off, logged, and
 // noted on screen ("Part of the pond could not be drawn"); the rest keeps drawing. A koi
@@ -72,6 +74,11 @@
 //   padMask()          {width, height, mask, canvas, pads}: the pad layer's hit mask (pad
 //                      index + 1 per pond pixel, 0 for water), its bitmap, and the pads it
 //                      was built for; null before the first build
+//   renderMode         the koi's drawing mode: "every-frame" or "20-per-second"; the page
+//                      takes ?slowKoi=<ms> to add that busy-wait to each koi render
+//   foodDrawn()        whether the last frame drew the food pellet
+//   ripples()          [{x, y, kind, age}] the rings alive now (ms of age)
+//   rippleCounts()     {drop, gulp, pad}: rings added since load
 //   foodDrops          taps on water since load (onWaterTap calls)
 //   lastFood           {x, y}: where the last one landed, in pond pixels, or null
 //   layerMs            per named layer, a running average of its draw time in the frame
@@ -87,10 +94,12 @@ import * as koiModule from './koi.js';
 import * as floor from './floor.js';
 import * as caustics from './caustics.js';
 import * as pads from './pads.js';
+import * as food from './food.js';
+import * as ripples from './ripples.js';
 import { pageCardInstance } from './card.js';
 import { setupLegend } from './legend.js';
 
-const LAYERS = [floor, caustics, koiModule, pads];
+const LAYERS = [floor, caustics, food, koiModule, pads, ripples];
 
 const BODY = 'black';
 const RESIZE_DEBOUNCE_MS = 300;
@@ -114,6 +123,8 @@ const state = {
   view: computeView(innerWidth, innerHeight, devicePixelRatio),
   koi: null,
   pads: [],
+  food: null,
+  renderMode: 'every-frame',
   legend: null,
   snapshot: null,
   accountId: null,
@@ -187,6 +198,12 @@ const hooks = {
     const built = pads.current();
     return built ? { width: built.width, height: built.height, mask: built.hitMask, canvas: built.canvas, pads: built.pads } : null;
   },
+  get renderMode() {
+    return koiHandle?.renderMode ?? 'every-frame';
+  },
+  foodDrawn: () => food.drawn(),
+  ripples: () => ripples.active(),
+  rippleCounts: () => ripples.counts(),
   foodDrops: 0,
   lastFood: null,
   layerMs: {},
@@ -236,11 +253,13 @@ function disableLayer(layer, error) {
 function koiFailed(error) {
   koiHandle?.free();
   state.koi = null;
+  state.food = null;
   report('koi', KOI_ERROR, error);
 }
 
 function rebuildLayers() {
   state.pads = state.koi ? state.koi.pads() : [];
+  state.food = state.koi ? state.koi.food() : null;
   state.legend = state.koi ? state.koi.legend() : null;
   for (const layer of LAYERS) {
     if (disabledLayers.has(layer)) continue;
@@ -353,13 +372,16 @@ function layerCost(names, { runs = 5, count = 60 } = {}) {
   }
 }
 
-// A tap or click on open water, in pond pixels. Task 8 builds feeding on this hook.
+// A tap or click on open water, in pond pixels: drop food (a new one moves the old) and
+// ring the water where it lands.
 function onWaterTap(x, y) {
   hooks.foodDrops += 1;
   hooks.lastFood = { x, y };
   if (!state.koi) return;
   try {
     state.koi.dropFood(x + 0.5, y + 0.5);
+    state.food = state.koi.food();
+    ripples.add(x, y, 'drop');
   } catch (error) {
     koiFailed(error);
   }
@@ -375,7 +397,11 @@ function tick(now) {
   state.gulped = false;
   if (state.koi) {
     try {
+      const before = state.koi.food();
       state.gulped = state.koi.step(dt);
+      state.food = state.gulped ? null : state.koi.food();
+      if (state.gulped && before) ripples.add(before.x, before.y, 'gulp');
+      state.renderMode = state.koi.renderMode;
     } catch (error) {
       koiFailed(error);
     }
@@ -523,7 +549,7 @@ function canvasSample() {
 
 sizeCanvases(state.view);
 setupLegend();
-pads.attachInput(canvas, { getState: () => state, onWaterTap, card: pageCardInstance() });
+pads.attachInput(canvas, { getState: () => state, onWaterTap, onPadTap: (x, y) => ripples.add(x, y, 'pad'), card: pageCardInstance() });
 watchPixelRatio();
 rebuildLayers();
 requestAnimationFrame(tick);
