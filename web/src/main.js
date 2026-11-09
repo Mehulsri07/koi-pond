@@ -76,6 +76,7 @@
 //                      was built for; null before the first build
 //   renderMode         the koi's drawing mode: "every-frame" or "20-per-second"; the page
 //                      takes ?slowKoi=<ms> to add that busy-wait to each koi render
+//   koiRenders         koi renders since the last build (frames drawn minus the ones that reused the bitmap)
 //   foodDrawn()        whether the last frame drew the food pellet
 //   ripples()          [{x, y, kind, age}] the rings alive now (ms of age)
 //   rippleCounts()     {drop, gulp, pad}: rings added since load
@@ -197,6 +198,9 @@ const hooks = {
   padMask: () => {
     const built = pads.current();
     return built ? { width: built.width, height: built.height, mask: built.hitMask, canvas: built.canvas, pads: built.pads } : null;
+  },
+  get koiRenders() {
+    return koiHandle?.renders ?? 0;
   },
   get renderMode() {
     return koiHandle?.renderMode ?? 'every-frame';
@@ -377,11 +381,11 @@ function layerCost(names, { runs = 5, count = 60 } = {}) {
 function onWaterTap(x, y) {
   hooks.foodDrops += 1;
   hooks.lastFood = { x, y };
+  ripples.add(x, y, 'drop'); // feedback even before the koi exists, and outside the koi's try
   if (!state.koi) return;
   try {
     state.koi.dropFood(x + 0.5, y + 0.5);
     state.food = state.koi.food();
-    ripples.add(x, y, 'drop');
   } catch (error) {
     koiFailed(error);
   }

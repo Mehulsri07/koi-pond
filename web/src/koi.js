@@ -15,22 +15,58 @@
 // create() and rebuild() throw what PondKoi::new throws (an invalid snapshot, say). A
 // failed rebuild leaves the old PondKoi in place; the caller decides whether to free it.
 
-// Adaptive drawing: for MEASURE_MS after create() or rebuild() the time each render takes
-// (render() and the copy of its pixels) is averaged; above SLOW_RENDER_MS the koi is
-// rendered SLOW_RATE times a second instead of every frame. Movement (step) still runs
-// every frame, and between renders the last bitmap is drawn again where it was.
+// Adaptive drawing: after create() or rebuild() the time each render takes (render() and
+// the copy of its pixels) is averaged over a window of at least MEASURE_MS and
+// MIN_SAMPLES frames; above SLOW_RENDER_MS the koi is rendered SLOW_RATE times a second
+// instead of every frame. Movement (step) still runs every frame, and between renders the
+// last bitmap is drawn again where it was. A gap of more than MAX_GAP_MS between frames
+// (a hidden tab, a long task) restarts the window, so the jank after a pause cannot
+// decide it.
 //
-// ?slowKoi=<ms> adds that busy-wait to every render, to try the slow path. It is allowed
-// on the live site: it only slows the tab of whoever put it in the address.
+// ?slowKoi=<ms> adds that busy-wait (at most MAX_SLOW_KOI_MS) to every render, to try the
+// slow path. It is allowed on the live site: it only slows the tab of whoever put it in
+// the address.
 const MEASURE_MS = 2000;
+const MIN_SAMPLES = 30;
+const MAX_GAP_MS = 250;
 const SLOW_RENDER_MS = 12;
 const SLOW_RATE = 20;
+const MAX_SLOW_KOI_MS = 50;
+
+/**
+ * The decision, apart from the clock: record(now, cost) once per frame (ms); it returns
+ * "every-frame" or "20-per-second" once it can tell, else null.
+ */
+export function createMeter({ windowMs = MEASURE_MS, minSamples = MIN_SAMPLES, maxGapMs = MAX_GAP_MS, slowMs = SLOW_RENDER_MS } = {}) {
+  let start = null;
+  let last = null;
+  let total = 0;
+  let count = 0;
+  return {
+    record(now, cost) {
+      if (last !== null && now - last > maxGapMs) {
+        start = null;
+        total = 0;
+        count = 0;
+      }
+      last = now;
+      if (start === null) {
+        start = now;
+        return null; // the first frame after a start (or a gap) is JIT warm-up
+      }
+      total += cost;
+      count += 1;
+      if (now - start < windowMs || count < minSamples) return null;
+      return total / count > slowMs ? '20-per-second' : 'every-frame';
+    },
+  };
+}
 
 let live = 0;
 
 function slowKoiMs() {
   const value = Number(new URLSearchParams(location.search).get('slowKoi'));
-  return Number.isFinite(value) && value > 0 ? value : 0;
+  return Number.isFinite(value) && value > 0 ? Math.min(value, MAX_SLOW_KOI_MS) : 0;
 }
 
 /** How many PondKoi instances exist right now (a leak check for tests). */
@@ -49,10 +85,9 @@ export function create(view, source) {
   let instance = null;
   const slowMs = slowKoiMs();
   let mode = 'every-frame';
-  let measureStart = null; // time of the first render after a build
-  let measuredTotal = 0;
-  let measuredCount = 0;
-  let lastRender = -Infinity;
+  let meter = createMeter(); // null once the mode is decided
+  let lastRender = -Infinity; // the time the next render is measured from
+  let renders = 0;
 
   function build(nextView) {
     const { PondKoi, snapshotJson, body, seed } = source;
@@ -61,9 +96,7 @@ export function create(view, source) {
     release();
     instance = next;
     mode = 'every-frame';
-    measureStart = null;
-    measuredTotal = 0;
-    measuredCount = 0;
+    meter = createMeter();
     lastRender = -Infinity;
   }
 
@@ -112,6 +145,9 @@ export function create(view, source) {
     dropFood(x, y) {
       instance.drop_food(x, y);
     },
+    get renders() {
+      return renders;
+    },
     get renderMode() {
       return mode;
     },
@@ -120,18 +156,20 @@ export function create(view, source) {
     },
     drawInto(ctx) {
       const now = performance.now();
-      if (mode === 'every-frame' || now - lastRender >= 1000 / SLOW_RATE) {
-        lastRender = now;
+      // Every 50 ms (an accumulator, so 60 Hz frames give 20 renders, not 15); after a
+      // long gap it starts again from now.
+      const due = mode === 'every-frame' || now - lastRender >= 1000 / SLOW_RATE;
+      if (due) {
+        lastRender = mode === 'every-frame' || now - lastRender > 2000 / SLOW_RATE ? now : lastRender + 1000 / SLOW_RATE;
+        renders += 1;
         instance.render();
         if (slowMs) while (performance.now() - now < slowMs);
         copyFrame();
-        if (mode === 'every-frame') {
-          if (measureStart === null) measureStart = now;
-          measuredTotal += performance.now() - now;
-          measuredCount += 1;
-          if (now - measureStart >= MEASURE_MS) {
-            if (measuredTotal / measuredCount > SLOW_RENDER_MS) mode = '20-per-second';
-            measureStart = Infinity; // decided: stop measuring until the next build
+        if (meter) {
+          const decision = meter.record(now, performance.now() - now);
+          if (decision) {
+            mode = decision;
+            meter = null;
           }
         }
       }

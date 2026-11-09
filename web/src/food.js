@@ -35,9 +35,33 @@ async function load(base = 'art/') {
   context.fillRect(0, 0, shadow.width, shadow.height);
   sprite = { image, shadow, anchor: entry.anchor };
 }
-load().catch((error) => {
-  failure = error;
-});
+// A first failure is retried once, on the next rebuild or after RETRY_MS; a second is kept
+// for draw() to throw, so main.js switches the layer off and says so.
+const RETRY_MS = 3000;
+let failures = 0;
+let loading = null;
+let retryTimer = 0;
+function loadOnce() {
+  if (loading || sprite || failure) return;
+  clearTimeout(retryTimer);
+  loading = load()
+    .catch((error) => {
+      failures += 1;
+      if (failures > 1) failure = error;
+      else {
+        console.warn('Food sprite failed to load; retrying once:', error);
+        retryTimer = setTimeout(loadOnce, RETRY_MS);
+      }
+    })
+    .finally(() => {
+      loading = null;
+    });
+}
+loadOnce();
+
+export function rebuild() {
+  loadOnce();
+}
 
 export function draw(ctx, state) {
   wasDrawn = false;
