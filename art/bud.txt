@@ -1,4 +1,9 @@
-# A closed pink bud on a short stem, seen from the side.
+# A closed pink bud on a short stem, rising from the water beside a pad.
+# The anchor is the stem's foot, at the water line: draw bud-ring there first.
+# Placement: the foot goes in open water beside its pad, at the pad's center plus
+# (radius + 4 px) toward whichever of left, up-left, up-right or right (screen angles
+# 180, -135, -45, 0 degrees) is farthest from the notch, so the bud rises clear of the
+# rim and its stem shows.
 # anchor 3 12
 ...r...
 ..pqp..

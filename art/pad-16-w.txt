@@ -1,0 +1,21 @@
+# A 16 px lilypad, notch pointing left, lit from the top left.
+# Transposed (x and y swapped) it serves the notch pointing up.
+# notch w
+# The anchor is the pad's center.
+# anchor 8 8
+......RRRR......
+....RRLLLLRS....
+...RLLLLGGGGS...
+..RLLLLGGGGGGS..
+.RLLSLGGGGGGGGS.
+..MMMSSGGGGGGTM.
+.....MMSGGGGTTSM
+.......MSGGTTTSM
+.......RLGTTTTSM
+.....RRLGTTTTSSM
+..RRRLLGTTTTSSM.
+.SGGLGGTTTTSSSM.
+..SGGGTTTTSSSM..
+...SGTTTTSSSM...
+....SMSSSSMM....
+......MMMM......

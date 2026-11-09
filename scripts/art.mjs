@@ -5,19 +5,25 @@
 //                                  any problem, writing nothing
 //
 // A grid is art/<name>.txt: one character per pixel, '.' transparent, every other
-// character a color from the legend in art/palette.json. Lines starting with '#' are
-// comments, except `# anchor X Y`, the sprite's anchor in its own pixels (where the code
-// places it: a pad's center, a flower's or bud's base); without one the anchor is the
-// sprite's center, rounded down. Blank lines are ignored.
+// character a color from the legend in art/palette.json. Blank lines are ignored, and
+// lines starting with '#' are comments, except:
+//   # anchor X Y   the sprite's anchor in its own pixels, where the code places it (a
+//                  pad's center, a flower's or bud's base); default: the center, rounded
+//                  down
+//   # notch DIR    pads only: the compass direction the drawn notch points (n is up)
 //
-// sprites.json maps each name to {width, height, anchor: [x, y]}. The PNGs are 8-bit
-// RGBA with alpha 0 or 255, written by the small encoder below on Node's zlib.
+// sprites.json maps each name to {width, height, anchor: [x, y]}; a pad also has
+// {notch, transposedNotch}: the direction it serves as drawn, and the one it serves when
+// drawn transposed (x and y swapped, which keeps the top-left light right). The PNGs are
+// 8-bit RGBA with alpha 0 or 255, written by the small encoder below on Node's zlib.
 //
 // --check fails if a grid uses a character missing from the legend, if its rows differ
-// in width, if any sprite in SPRITES has no grid (or a grid is not in SPRITES), if any
-// PNG pixel is not a palette color or has alpha other than 0 or 255, or if a PNG or
-// sprites.json is missing or does not match its grid (run the script without --check).
-import { readFileSync, writeFileSync, mkdirSync, existsSync, readdirSync } from 'node:fs';
+// in width, if any sprite in SPRITES has no grid (or a grid is not in SPRITES), if a
+// pad's notch line is missing or wrong, if a pad size lacks one of the eight notch
+// directions, if any PNG pixel is not a palette color or has alpha other than 0 or 255,
+// or if a PNG or sprites.json is missing, left over, or does not match its grid (run the
+// script without --check).
+import { readFileSync, writeFileSync, mkdirSync, existsSync, readdirSync, unlinkSync } from 'node:fs';
 import { deflateSync, inflateSync } from 'node:zlib';
 import { join, resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -26,10 +32,18 @@ const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const ART = join(ROOT, 'art');
 const OUT = join(ROOT, 'web', 'art');
 
+export const PAD_SIZES = [16, 24, 32, 40, 48];
+// Pads are lit from the top left, a light symmetric about the main diagonal, so a pad
+// transposed (x and y swapped) is still lit right. Five drawn notch directions and their
+// transposes cover all eight compass directions (screen compass: n is up).
+export const PAD_DIRECTIONS = ['e', 'w', 'ne', 'se', 'nw'];
+export const TRANSPOSED = { e: 's', w: 'n', ne: 'sw', se: 'se', nw: 'nw' };
+const COMPASS = ['n', 'ne', 'e', 'se', 's', 'sw', 'w', 'nw'];
+
 export const SPRITES = [
-  'pad-16', 'pad-24', 'pad-32', 'pad-40', 'pad-48',
+  ...PAD_SIZES.flatMap((size) => PAD_DIRECTIONS.map((direction) => `pad-${size}-${direction}`)),
   'lotus-pink-s', 'lotus-pink-l', 'lotus-white-s', 'lotus-white-l', 'lotus-purple-s', 'lotus-purple-l',
-  'bud',
+  'bud', 'bud-ring',
   'droplet',
   'moon-reflection',
   'firefly-0', 'firefly-1',
@@ -155,12 +169,15 @@ export function readGrid(name, legend, problems) {
   const lines = readFileSync(join(ART, `${name}.txt`), 'utf8').split('\n');
   const rows = [];
   let anchor = null;
+  let notch = null;
   for (const line of lines) {
     const text = line.replace(/\r$/, '');
     if (text.trim() === '') continue;
     if (text.startsWith('#')) {
       const match = /^#\s*anchor\s+(\d+)\s+(\d+)\s*$/.exec(text);
       if (match) anchor = [Number(match[1]), Number(match[2])];
+      const notchMatch = /^#\s*notch\s+([a-z]+)\s*$/.exec(text);
+      if (notchMatch) notch = notchMatch[1];
       continue;
     }
     rows.push(text);
@@ -176,7 +193,10 @@ export function readGrid(name, legend, problems) {
   });
   anchor ??= [Math.floor(width / 2), Math.floor(height / 2)];
   if (anchor[0] >= width || anchor[1] >= height) problems.push(`${name}: anchor ${anchor} is outside the sprite`);
-  return { width, height, rows, anchor };
+  const padMatch = /^pad-\d+-([a-z]+)$/.exec(name);
+  if (padMatch && notch !== padMatch[1]) problems.push(`${name}: needs a '# notch ${padMatch[1]}' line`);
+  if (!padMatch && notch) problems.push(`${name}: only pads have a notch`);
+  return { width, height, rows, anchor, notch };
 }
 
 export function rasterize({ width, height, rows }, legend) {
@@ -225,6 +245,16 @@ function main() {
     const grid = readGrid(name, legend, problems);
     images[name] = { ...grid, rgba: rasterize(grid, legend) };
     manifest[name] = { width: grid.width, height: grid.height, anchor: grid.anchor };
+    if (grid.notch) Object.assign(manifest[name], { notch: grid.notch, transposedNotch: TRANSPOSED[grid.notch] });
+  }
+  for (const size of PAD_SIZES) {
+    const served = new Set();
+    for (const direction of PAD_DIRECTIONS) {
+      const entry = manifest[`pad-${size}-${direction}`];
+      if (entry) served.add(entry.notch).add(entry.transposedNotch);
+    }
+    const missing = COMPASS.filter((direction) => !served.has(direction));
+    if (missing.length) problems.push(`pad-${size}: no sprite serves the notch pointing ${missing.join(', ')}`);
   }
   const manifestText = `${JSON.stringify(manifest, null, 2)}\n`;
 
@@ -248,6 +278,11 @@ function main() {
         problems.push(`web/art/${name}.png does not match art/${name}.txt`);
       }
     }
+    if (existsSync(OUT)) {
+      for (const file of readdirSync(OUT)) {
+        if (file.endsWith('.png') && !SPRITES.includes(file.slice(0, -4))) problems.push(`web/art/${file} is not a known sprite`);
+      }
+    }
     const manifestFile = join(OUT, 'sprites.json');
     if (!existsSync(manifestFile) || readFileSync(manifestFile, 'utf8') !== manifestText) {
       problems.push('web/art/sprites.json is missing or does not match the grids');
@@ -264,6 +299,9 @@ function main() {
     return;
   }
   mkdirSync(OUT, { recursive: true });
+  for (const file of readdirSync(OUT)) {
+    if (file.endsWith('.png') && !SPRITES.includes(file.slice(0, -4))) unlinkSync(join(OUT, file));
+  }
   for (const name of SPRITES) {
     const { width, height, rgba } = images[name];
     writeFileSync(join(OUT, `${name}.png`), encodePng(width, height, rgba));

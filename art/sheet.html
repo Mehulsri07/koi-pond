@@ -29,7 +29,7 @@
   h1 { font-size: 16px; margin: 0 0 4px; }
   h2 { font-size: 13px; margin: 0 0 8px; color: var(--ink-dim); font-weight: normal; text-transform: uppercase; letter-spacing: 0.08em; }
   .layout { display: flex; gap: 16px; align-items: flex-start; flex-wrap: wrap; }
-  .waters { flex: 1 1 760px; display: flex; flex-direction: column; gap: 16px; min-width: 0; }
+  .waters { flex: 1 1 100%; display: flex; flex-direction: column; gap: 16px; min-width: 0; }
   .water { border-radius: 6px; padding: 12px; }
   .water.day { background: var(--day); }
   .water.night { background: var(--night); }
@@ -37,7 +37,7 @@
   figure { margin: 0; display: flex; flex-direction: column; align-items: center; gap: 4px; }
   figcaption { color: var(--ink-dim); font-size: 11px; }
   canvas { image-rendering: pixelated; display: block; }
-  .palette { flex: 0 0 280px; background: #0f1a1a; border-radius: 6px; padding: 12px; }
+  .palette { flex: 0 1 560px; columns: 2; background: #0f1a1a; border-radius: 6px; padding: 12px; }
   .swatch { display: flex; align-items: center; gap: 8px; margin: 2px 0; }
   .chip { width: 28px; height: 18px; border-radius: 2px; flex: none; }
   .key { width: 14px; text-align: center; color: var(--ink); }
@@ -47,7 +47,7 @@
 </head>
 <body>
 <h1>Pond sprites</h1>
-<p class="hex">4× native. Pads are drawn with the notch pointing right and the light from the top left.</p>
+<p class="hex">4× native. Pads are lit from the top left; each size shows all eight notch directions, five drawn and three drawn transposed (x and y swapped).</p>
 <div class="layout">
   <div class="waters">
     <section class="water day"><h2>Day water</h2><div class="sprites"></div><h2>On the pond</h2><div class="combos row"></div></section>
@@ -57,20 +57,22 @@
 </div>
 <script type="module">
 const SCALE = 4;
+const PAD_SIZES = [16, 24, 32, 40, 48];
+const COMPASS = ['e', 'se', 's', 'sw', 'w', 'nw', 'n', 'ne'];
 const GROUPS = [
-  ['pad-16', 'pad-24', 'pad-32', 'pad-40', 'pad-48'],
   ['lotus-pink-s', 'lotus-white-s', 'lotus-purple-s', 'lotus-pink-l', 'lotus-white-l', 'lotus-purple-l', 'bud'],
-  ['droplet', 'food', 'firefly-0', 'firefly-1', 'moon-reflection'],
+  ['bud-ring', 'droplet', 'food', 'firefly-0', 'firefly-1', 'moon-reflection'],
 ];
-// Pads dressed as the pond will show them: [pad, [sprite, dx, dy] ...], offsets from the
-// pad's anchor to the dressing's anchor, in native pixels.
+// Pads dressed as the pond will show them: [pad, transposed, [sprite, dx, dy] ...],
+// offsets from the pad's anchor to the dressing's anchor, in native pixels. A bud stands
+// in the water beside its pad, on its ring.
 const COMBOS = [
-  ['pad-16', []],
-  ['pad-24', [['lotus-pink-s', -2, 1]]],
-  ['pad-32', [['lotus-white-s', -3, 1]]],
-  ['pad-40', [['lotus-purple-l', -4, 2], ['droplet', 4, 9], ['droplet', -11, -4]]],
-  ['pad-48', [['lotus-pink-l', -5, 3], ['droplet', 8, 10], ['droplet', -4, -13]]],
-  ['pad-48', [['lotus-white-l', -4, 2], ['bud', 12, -10], ['droplet', -13, 6]]],
+  ['pad-16-ne', false, []],
+  ['pad-24-w', false, [['lotus-pink-s', 2, 1]]],
+  ['pad-32-ne', true, [['lotus-white-s', -1, 0]]],
+  ['pad-40-nw', false, [['lotus-purple-l', 2, 3], ['droplet', -6, 10], ['droplet', 9, -9]]],
+  ['pad-48-se', false, [['lotus-pink-l', -3, 0], ['droplet', -12, 10], ['droplet', 4, -15]]],
+  ['pad-48-e', true, [['lotus-white-l', 3, -3], ['droplet', -13, 6], ['bud-ring', -28, 0], ['bud', -28, 0]]],
 ];
 
 function load(name) {
@@ -100,7 +102,36 @@ function spriteCanvas(image) {
   return canvas;
 }
 
-function comboCanvas([padName, dressing], images, sprites) {
+// One pad as the pond shows it for a notch direction: drawn, or drawn transposed.
+function padFor(size, direction, sprites) {
+  for (const [name, sprite] of Object.entries(sprites)) {
+    if (!name.startsWith(`pad-${size}-`)) continue;
+    if (sprite.notch === direction) return { name, transposed: false };
+    if (sprite.transposedNotch === direction) return { name, transposed: true };
+  }
+  return null;
+}
+
+function drawPad(ctx, image, x, y, transposed) {
+  ctx.save();
+  ctx.translate(x, y);
+  if (transposed) ctx.transform(0, 1, 1, 0, 0, 0);
+  ctx.drawImage(image, 0, 0);
+  ctx.restore();
+}
+
+function padCanvas(image, transposed) {
+  const canvas = document.createElement('canvas');
+  canvas.width = image.width * SCALE;
+  canvas.height = image.height * SCALE;
+  const ctx = canvas.getContext('2d');
+  ctx.imageSmoothingEnabled = false;
+  ctx.scale(SCALE, SCALE);
+  drawPad(ctx, image, 0, 0, transposed);
+  return canvas;
+}
+
+function comboCanvas([padName, transposed, dressing], images, sprites) {
   const pad = sprites[padName];
   const margin = 12;
   const width = pad.width + margin * 2;
@@ -113,7 +144,7 @@ function comboCanvas([padName, dressing], images, sprites) {
   ctx.scale(SCALE, SCALE);
   const cx = margin + pad.anchor[0];
   const cy = margin + pad.anchor[1];
-  ctx.drawImage(images[padName], margin, margin);
+  drawPad(ctx, images[padName], margin, margin, transposed);
   for (const [name, dx, dy] of dressing) {
     const sprite = sprites[name];
     ctx.drawImage(images[name], cx + dx - sprite.anchor[0], cy + dy - sprite.anchor[1]);
@@ -130,6 +161,17 @@ async function main() {
   const images = Object.fromEntries(await Promise.all(names.map(async (name) => [name, await load(name)])));
   for (const water of document.querySelectorAll('.water')) {
     const holder = water.querySelector('.sprites');
+    for (const size of PAD_SIZES) {
+      const row = document.createElement('div');
+      row.className = 'row';
+      for (const direction of COMPASS) {
+        const pad = padFor(size, direction, sprites);
+        if (!pad) continue;
+        const label = pad.transposed ? `${direction}: ${pad.name} transposed` : `${direction}: ${pad.name}`;
+        row.append(figure(padCanvas(images[pad.name], pad.transposed), label));
+      }
+      holder.append(row);
+    }
     for (const group of GROUPS) {
       const row = document.createElement('div');
       row.className = 'row';
@@ -141,7 +183,7 @@ async function main() {
     }
     const combos = water.querySelector('.combos');
     for (const combo of COMBOS) {
-      combos.append(figure(comboCanvas(combo, images, sprites), [combo[0], ...combo[1].map(([name]) => name)].join(' + ')));
+      combos.append(figure(comboCanvas(combo, images, sprites), [combo[1] ? `${combo[0]} transposed` : combo[0], ...combo[2].map(([name]) => name)].join(' + ')));
     }
   }
   const swatches = document.getElementById('swatches');

@@ -1,43 +1,253 @@
 {
-  "pad-16": {
+  "pad-16-e": {
     "width": 16,
     "height": 16,
     "anchor": [
       8,
       8
-    ]
+    ],
+    "notch": "e",
+    "transposedNotch": "s"
   },
-  "pad-24": {
+  "pad-16-w": {
+    "width": 16,
+    "height": 16,
+    "anchor": [
+      8,
+      8
+    ],
+    "notch": "w",
+    "transposedNotch": "n"
+  },
+  "pad-16-ne": {
+    "width": 16,
+    "height": 16,
+    "anchor": [
+      8,
+      8
+    ],
+    "notch": "ne",
+    "transposedNotch": "sw"
+  },
+  "pad-16-se": {
+    "width": 16,
+    "height": 16,
+    "anchor": [
+      8,
+      8
+    ],
+    "notch": "se",
+    "transposedNotch": "se"
+  },
+  "pad-16-nw": {
+    "width": 16,
+    "height": 16,
+    "anchor": [
+      8,
+      8
+    ],
+    "notch": "nw",
+    "transposedNotch": "nw"
+  },
+  "pad-24-e": {
     "width": 24,
     "height": 24,
     "anchor": [
       12,
       12
-    ]
+    ],
+    "notch": "e",
+    "transposedNotch": "s"
   },
-  "pad-32": {
+  "pad-24-w": {
+    "width": 24,
+    "height": 24,
+    "anchor": [
+      12,
+      12
+    ],
+    "notch": "w",
+    "transposedNotch": "n"
+  },
+  "pad-24-ne": {
+    "width": 24,
+    "height": 24,
+    "anchor": [
+      12,
+      12
+    ],
+    "notch": "ne",
+    "transposedNotch": "sw"
+  },
+  "pad-24-se": {
+    "width": 24,
+    "height": 24,
+    "anchor": [
+      12,
+      12
+    ],
+    "notch": "se",
+    "transposedNotch": "se"
+  },
+  "pad-24-nw": {
+    "width": 24,
+    "height": 24,
+    "anchor": [
+      12,
+      12
+    ],
+    "notch": "nw",
+    "transposedNotch": "nw"
+  },
+  "pad-32-e": {
     "width": 38,
     "height": 38,
     "anchor": [
       19,
       19
-    ]
+    ],
+    "notch": "e",
+    "transposedNotch": "s"
   },
-  "pad-40": {
+  "pad-32-w": {
+    "width": 38,
+    "height": 38,
+    "anchor": [
+      19,
+      19
+    ],
+    "notch": "w",
+    "transposedNotch": "n"
+  },
+  "pad-32-ne": {
+    "width": 38,
+    "height": 38,
+    "anchor": [
+      19,
+      19
+    ],
+    "notch": "ne",
+    "transposedNotch": "sw"
+  },
+  "pad-32-se": {
+    "width": 38,
+    "height": 38,
+    "anchor": [
+      19,
+      19
+    ],
+    "notch": "se",
+    "transposedNotch": "se"
+  },
+  "pad-32-nw": {
+    "width": 38,
+    "height": 38,
+    "anchor": [
+      19,
+      19
+    ],
+    "notch": "nw",
+    "transposedNotch": "nw"
+  },
+  "pad-40-e": {
     "width": 46,
     "height": 46,
     "anchor": [
       23,
       23
-    ]
+    ],
+    "notch": "e",
+    "transposedNotch": "s"
   },
-  "pad-48": {
+  "pad-40-w": {
+    "width": 46,
+    "height": 46,
+    "anchor": [
+      23,
+      23
+    ],
+    "notch": "w",
+    "transposedNotch": "n"
+  },
+  "pad-40-ne": {
+    "width": 46,
+    "height": 46,
+    "anchor": [
+      23,
+      23
+    ],
+    "notch": "ne",
+    "transposedNotch": "sw"
+  },
+  "pad-40-se": {
+    "width": 46,
+    "height": 46,
+    "anchor": [
+      23,
+      23
+    ],
+    "notch": "se",
+    "transposedNotch": "se"
+  },
+  "pad-40-nw": {
+    "width": 46,
+    "height": 46,
+    "anchor": [
+      23,
+      23
+    ],
+    "notch": "nw",
+    "transposedNotch": "nw"
+  },
+  "pad-48-e": {
     "width": 54,
     "height": 54,
     "anchor": [
       27,
       27
-    ]
+    ],
+    "notch": "e",
+    "transposedNotch": "s"
+  },
+  "pad-48-w": {
+    "width": 54,
+    "height": 54,
+    "anchor": [
+      27,
+      27
+    ],
+    "notch": "w",
+    "transposedNotch": "n"
+  },
+  "pad-48-ne": {
+    "width": 54,
+    "height": 54,
+    "anchor": [
+      27,
+      27
+    ],
+    "notch": "ne",
+    "transposedNotch": "sw"
+  },
+  "pad-48-se": {
+    "width": 54,
+    "height": 54,
+    "anchor": [
+      27,
+      27
+    ],
+    "notch": "se",
+    "transposedNotch": "se"
+  },
+  "pad-48-nw": {
+    "width": 54,
+    "height": 54,
+    "anchor": [
+      27,
+      27
+    ],
+    "notch": "nw",
+    "transposedNotch": "nw"
   },
   "lotus-pink-s": {
     "width": 13,
@@ -93,6 +303,14 @@
     "anchor": [
       3,
       12
+    ]
+  },
+  "bud-ring": {
+    "width": 9,
+    "height": 3,
+    "anchor": [
+      4,
+      1
     ]
   },
   "droplet": {

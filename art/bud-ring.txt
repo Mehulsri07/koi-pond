@@ -1,0 +1,6 @@
+# A small still ring on the water where a bud's stem comes up. Draw it first, then the
+# bud with its anchor on this anchor: the stem stands in the open middle.
+# anchor 4 1
+..XZzZX..
+.X.....X.
+..WXXXW..
