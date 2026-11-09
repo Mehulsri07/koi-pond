@@ -48,6 +48,9 @@ const SCREENSHOTS = {
   'night-desktop': join(SCREENSHOT_DIR, 'site-night-desktop.png'),
   'night-phone': join(SCREENSHOT_DIR, 'site-night-phone.png'),
   'dusk-desktop': join(SCREENSHOT_DIR, 'site-dusk-desktop.png'),
+  // The legend open.
+  'legend-desktop': join(SCREENSHOT_DIR, 'site-legend-desktop.png'),
+  'legend-phone': join(SCREENSHOT_DIR, 'site-legend-phone.png'),
 };
 
 // Pre-flight: without the wasm build every page check would only time out.
@@ -343,6 +346,111 @@ check('the legend opens and closes', BOTH, async ({ page, open }) => {
   assert.equal(boxes.overlap, false, 'the legend covers the header button');
   await button.click();
   await legend.waitFor({ state: 'hidden', timeout: 2000 });
+});
+
+// The legend's text, read after opening it.
+async function openLegend(page) {
+  await page.locator('#legend-button').click();
+  await page.locator('#legend').waitFor({ state: 'visible', timeout: 2000 });
+  await page.waitForFunction(() => document.getElementById('legend-body').textContent.includes('lilypad'), null, { timeout: 3000 });
+}
+
+check('the legend tells the truth', BOTH, async ({ page, errors, open }) => {
+  assert.equal(await open(), null);
+  const facts = await page.evaluate(() => ({ legend: window.__pond.state.legend, pads: window.__pond.state.pads }));
+  await openLegend(page);
+  const text = await page.locator('#legend-body').innerText();
+  const total = facts.legend.totalContributions.toLocaleString('en-US');
+  assert.ok(text.includes(`${total} contributions through`), `total ${total} in: ${text}`);
+  assert.ok(text.includes(`a ${facts.legend.growthStage} koi`), 'stage');
+  const { rule, value } = facts.legend.reason;
+  const phrase = {
+    deep_rest: `Deep rest: ${value} quiet days`,
+    rest: `Resting: ${value} quiet days`,
+    first_contribution_of_week: 'Feeding at the surface: first contribution this week',
+    crossed_milestone: `Darting: crossed ${Number(value).toLocaleString('en-US')} contributions this week`,
+    busy_week: 'Darting: busiest week in a year',
+    steady: 'Cruising',
+  }[rule];
+  assert.ok(phrase && text.includes(phrase), `reason "${phrase}" in: ${text}`);
+  assert.ok(text.includes(`${facts.legend.padCount} lilypads, one per public repo`), 'pad count');
+  assert.equal(facts.legend.padCount, facts.pads.length);
+  assert.match(text, /Data from [A-Z][a-z]{2} \d{1,2}, \d{4}, refreshed nightly\./);
+  assert.match(text, /Koi drawn every frame/);
+  assert.match(text, /(Dawn|Day|Dusk|Night) · \d\d:\d\d your time/);
+  for (const language of facts.legend.languages) assert.ok(text.includes(language.name), language.name);
+  assert.equal(await page.locator('#legend-body .legend-dot').count(), facts.legend.languages.length);
+  assert.deepEqual(errors, []);
+});
+
+check('the legend works from the keyboard', BOTH, async ({ page, errors, open }) => {
+  assert.equal(await open(), null);
+  await page.focus('body');
+  for (let i = 0; i < 6; i += 1) {
+    await page.keyboard.press('Tab');
+    if (await page.evaluate(() => document.activeElement?.id === 'legend-button')) break;
+  }
+  assert.ok(await page.evaluate(() => document.activeElement?.id === 'legend-button'), 'tabbed to the button');
+  await page.keyboard.press('Enter');
+  await page.locator('#legend').waitFor({ state: 'visible', timeout: 2000 });
+  assert.ok(await page.evaluate(() => document.getElementById('legend').contains(document.activeElement)), 'focus moved in');
+  assert.equal(await page.getAttribute('#legend', 'aria-modal'), 'false');
+  assert.equal(await page.getAttribute('#legend', 'role'), 'dialog');
+  await page.keyboard.press('Escape');
+  await page.locator('#legend').waitFor({ state: 'hidden', timeout: 2000 });
+  assert.ok(await page.evaluate(() => document.activeElement?.id === 'legend-button'), 'focus returned');
+  assert.deepEqual(errors, []);
+});
+
+check('every repo is a link in the legend', BOTH, async ({ page, errors, open }) => {
+  assert.equal(await open(), null);
+  const pads = await page.evaluate(() => window.__pond.state.pads);
+  await openLegend(page);
+  const items = await page.$$eval('#legend-body .legend-repos li', (nodes) => nodes.map((li) => ({
+    text: li.textContent, href: li.querySelector('a')?.getAttribute('href') ?? null,
+    target: li.querySelector('a')?.getAttribute('target') ?? null, rel: li.querySelector('a')?.getAttribute('rel') ?? null,
+  })));
+  assert.equal(items.length, pads.length);
+  const sorted = [...pads].sort((a, b) => b.commits - a.commits);
+  sorted.forEach((pad, index) => {
+    assert.ok(items[index].text.includes(pad.repo.split('/').pop()), `${pad.repo} listed in order`);
+    assert.ok(items[index].text.includes(`${pad.commits.toLocaleString('en-US')} commit`), 'commits');
+    assert.equal(items[index].href, pad.url, `${pad.repo} href`);
+    if (pad.url) assert.deepEqual([items[index].target, items[index].rel], ['_blank', 'noopener']);
+  });
+  assert.ok(pads.some((pad) => pad.url), 'the fixture has links');
+  assert.deepEqual(errors, []);
+});
+
+check('a hostile repo name is text in the legend', ['desktop'], async ({ page, errors, open }) => {
+  const fixture = JSON.parse(await readFile(join(WEB_ROOT, 'fixtures', 'snapshot.json'), 'utf8'));
+  fixture.owned_repositories[0].name_with_owner = 'Mehulsri07/<img src=x onerror=window.__xss=1>';
+  await page.route('**/fixtures/snapshot.json', (route) =>
+    route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(fixture) }),
+  );
+  assert.equal(await open(), null);
+  await openLegend(page);
+  assert.match(await page.locator('#legend-body').innerText(), /<img src=x/);
+  assert.equal(await page.locator('#legend-body img').count(), 0);
+  assert.equal(await page.evaluate(() => window.__xss), undefined);
+  assert.deepEqual(errors, []);
+});
+
+check('the legend light line follows the clock', ['desktop'], async ({ page, errors, open }) => {
+  assert.equal(await open(), null);
+  await openLegend(page);
+  assert.match(await page.locator('#legend-body').innerText(), /Day · 12:00 your time/);
+  await atClock(page, 2, 14);
+  await page.waitForFunction(() => document.getElementById('legend-body').textContent.includes('Night · 02:14 your time'), null, { timeout: 4000 });
+  assert.deepEqual(errors, []);
+});
+
+check('the legend says how the koi is drawn', ['desktop'], async ({ page, errors, open }) => {
+  assert.equal(await open('?fixture&slowKoi=15'), null);
+  await page.waitForFunction(() => window.__pond.renderMode === '20-per-second', null, { timeout: 10000 });
+  await openLegend(page);
+  assert.match(await page.locator('#legend-body').innerText(), /Koi drawn 20 times a second on this device/);
+  assert.deepEqual(errors, []);
 });
 
 check('a failing layer is switched off and the koi swims on', BOTH, async ({ page, errors, open }) => {
@@ -1694,6 +1802,23 @@ if (!only) {
     } catch (error) {
       failed += 1;
       console.log(`FAIL  screenshot [${shot}]\n      ${error.message ?? error}`);
+    } finally {
+      await session.context.close();
+    }
+  }
+  // The legend, open.
+  for (const size of BOTH) {
+    const session = await newPage(size);
+    try {
+      assert.equal(await session.open(), null);
+      await padTargets(session.page);
+      await openLegend(session.page);
+      await session.page.waitForTimeout(600);
+      await session.page.screenshot({ path: SCREENSHOTS[`legend-${size}`] });
+      console.log(`screenshot: ${SCREENSHOTS[`legend-${size}`]}`);
+    } catch (error) {
+      failed += 1;
+      console.log(`FAIL  screenshot [legend ${size}]\n      ${error.message ?? error}`);
     } finally {
       await session.context.close();
     }

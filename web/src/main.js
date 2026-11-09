@@ -599,7 +599,7 @@ function canvasSample() {
 }
 
 sizeCanvases(state.view);
-setupLegend();
+setupLegend({ getState: () => state });
 pads.attachInput(canvas, { getState: () => state, onWaterTap, onPadTap: (x, y) => ripples.add(x, y, 'pad'), card: pageCardInstance() });
 watchPixelRatio();
 rebuildLayers();
