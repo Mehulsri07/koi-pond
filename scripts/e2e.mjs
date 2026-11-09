@@ -1145,8 +1145,8 @@ check('a ripple spreads at 24 px a second and fades out in a second', ['desktop'
     assert.ok(seen.diff > 25, `a ring is visible at ${ageMs} ms (diff ${seen.diff})`);
     assert.ok(Math.abs(seen.r - expected) <= 2.5, `radius ${seen.r} at ${Math.round(seen.age)} ms, expected about ${expected.toFixed(1)}`);
   }
-  // Gone a second after it began: from age 750 ms, well within 1.3 s.
-  await page.waitForFunction(() => window.__pond.ripples().length === 0, null, { polling: 20, timeout: 1300 });
+  // The ring lives 1000 ms: from the 750 ms sample it is gone within about 500 ms.
+  await page.waitForFunction(() => window.__pond.ripples().length === 0, null, { polling: 20, timeout: 500 });
   assert.deepEqual(errors, []);
 });
 
@@ -1157,7 +1157,11 @@ check('the render-time decision survives pauses and warm-up', [], async () => {
   const run = (frames) => {
     const meter = createMeter();
     let decision = null;
-    for (const [at, cost] of frames) decision = meter.record(at, cost) ?? decision;
+    // The koi stops measuring at its first decision, so does this.
+    for (const [at, cost] of frames) {
+      decision = meter.record(at, cost);
+      if (decision) break;
+    }
     return decision;
   };
   const steady = (from, count, cost) => Array.from({ length: count }, (_, i) => [from + i * 16.7, cost]);
@@ -1177,7 +1181,14 @@ check('the render-time decision survives pauses and warm-up', [], async () => {
   // A stutter (a 1.5 s stall) every 1.5 s keeps restarting the window; after three it
   // decides on what it has.
   const stutter = (cost) => Array.from({ length: 6 }, (_, k) => steady(k * 1500, 40, cost)).flat();
+  // One hiccup is not a slow device: a spike first, mid-window, or right after a pause.
+  assert.equal(run([[0, 150], ...steady(17, 140, 3)]), 'every-frame', 'a spike as the first frame');
+  assert.equal(run([...steady(0, 40, 3), [700, 150], ...steady(717, 140, 3)]), 'every-frame', 'a spike mid-window');
+  assert.equal(run([...steady(0, 50, 3), [20000, 150], ...steady(20017, 140, 3)]), 'every-frame', 'a spike after a pause');
+  assert.equal(run(Array.from({ length: 3 }, (_, i) => [i * 316, 300])), '20-per-second', '300 ms renders decide within three');
   assert.equal(run(stutter(3)), 'every-frame', 'a stuttering quick device still decides');
+  // Three stalls with fewer than ten samples between decide nothing yet.
+  assert.equal(run([0, 1, 2, 3].flatMap((k) => steady(k * 2000, 5, 3))), null, 'too few samples to call it');
   assert.equal(run(stutter(15)), '20-per-second', 'and a stuttering slow one');
 });
 
