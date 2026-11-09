@@ -26,6 +26,8 @@
 //   gulped      true on the frame the koi gulps food
 //   food        {x, y}: the food pellet's pond pixel, or null (cleared on the gulp frame)
 //   renderMode  the koi's drawing mode, "every-frame" or "20-per-second" (for the legend)
+//   phase       phaseAt(new Date()) for this frame (web/src/lighting.js): the light by the
+//               visitor's clock
 //
 // Failures stay local. A layer whose draw or rebuild throws is switched off, logged, and
 // noted on screen ("Part of the pond could not be drawn"); the rest keeps drawing. A koi
@@ -41,6 +43,8 @@
 //
 // The page background takes the color of the pond's bottom-right pixel after each
 // rebuild, so the up-to-1 px strip a scale-2 pond leaves at odd viewport sizes blends in.
+// It is sampled again whenever the light's grade moves by a step (a unit of any color
+// channel or of alpha × 255), so the strip follows dawn, dusk and night.
 //
 // Test hooks on window.__pond (for scripts/e2e.mjs; harmless on the live site):
 //   ready              true once the koi is swimming
@@ -82,6 +86,9 @@
 //   rippleCounts()     {drop, gulp, pad}: rings added since load
 //   foodDrops          taps on water since load (onWaterTap calls)
 //   lastFood           {x, y}: where the last one landed, in pond pixels, or null
+//   phase              the light this frame: {grade, lift, night} (web/src/lighting.js)
+//   fireflies          fireflies drawn last frame (10 at night, 0 by day)
+//   fireflySpots()     [{x, y, frame}]: each firefly's pond pixel and sprite (0 glow, 1 dim)
 //   layerMs            per named layer, a running average of its draw time in the frame
 //                      loop (ms; draw calls only, as the canvas may raster later)
 //   layerCost(names, {runs, count})  {layers, calibration}: ms a frame for the named
@@ -97,10 +104,11 @@ import * as caustics from './caustics.js';
 import * as pads from './pads.js';
 import * as food from './food.js';
 import * as ripples from './ripples.js';
+import * as lighting from './lighting.js';
 import { pageCardInstance } from './card.js';
 import { setupLegend } from './legend.js';
 
-const LAYERS = [floor, caustics, food, koiModule, pads, ripples];
+const LAYERS = [floor, caustics, food, koiModule, pads, ripples, lighting];
 
 const BODY = 'black';
 const RESIZE_DEBOUNCE_MS = 300;
@@ -134,6 +142,7 @@ const state = {
   now: 0,
   dt: 0,
   gulped: false,
+  phase: lighting.phaseAt(new Date()),
 };
 reducedMotionQuery.addEventListener('change', (event) => {
   state.reducedMotion = event.matches;
@@ -143,6 +152,7 @@ let wasm = null;
 let koiHandle = null; // kept after a failure so the koi can be built again
 const disabledLayers = new Set();
 let sampleEdge = true;
+let edgeLight = null; // the light's grade, in steps, when the page edge was last sampled
 
 const hooks = {
   ready: false,
@@ -210,6 +220,13 @@ const hooks = {
   rippleCounts: () => ripples.counts(),
   foodDrops: 0,
   lastFood: null,
+  get phase() {
+    return state.phase;
+  },
+  get fireflies() {
+    return lighting.fireflyCount();
+  },
+  fireflySpots: () => lighting.spots(),
   layerMs: {},
   layerCost: (names, count) => layerCost(names, count),
 };
@@ -391,6 +408,11 @@ function onWaterTap(x, y) {
   }
 }
 
+// The light's grade in whole steps, to tell when the page edge needs sampling again.
+function lightSteps({ grade, lift }) {
+  return [grade.r, grade.g, grade.b, grade.a * 255, lift.r, lift.g, lift.b, lift.a * 255].map(Math.round).join();
+}
+
 let lastTime = null;
 function tick(now) {
   requestAnimationFrame(tick);
@@ -399,6 +421,12 @@ function tick(now) {
   state.now = now;
   state.dt = dt;
   state.gulped = false;
+  state.phase = lighting.phaseAt(new Date());
+  const light = lightSteps(state.phase);
+  if (light !== edgeLight) {
+    edgeLight = light;
+    sampleEdge = true;
+  }
   if (state.koi) {
     try {
       const before = state.koi.food();

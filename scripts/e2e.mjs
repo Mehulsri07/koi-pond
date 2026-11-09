@@ -5,13 +5,16 @@
 // Run scripts/build.sh first so web/pkg exists (the script stops at once if it does not).
 // It serves web/ itself on a free port, loads the page with ?fixture
 // (web/fixtures/snapshot.json), runs every check at each size it names, saves desktop and
-// phone screenshots (plus one with a pad's card open and a 4× floor detail crop), and exits non-zero on any failure. --only runs just the checks whose
+// phone screenshots (plus one with a pad's card open, a 4× floor detail crop, and night and
+// dusk by a fixed clock), and exits non-zero on any failure. --only runs just the checks whose
 // name contains the text. Screenshots go to --screenshots <dir>, else $E2E_SCREENSHOTS,
 // else <os tmpdir>/koi-pond-e2e; the script prints where.
 //
 // Adding a check: call check(name, sizes, async ({ page, errors, size, open }) => { ... })
 // below. `open(query, options)` loads the pond into `page` and waits until window.__pond
-// says it is ready (or failed); a check throws (assert) to fail. The page's test hooks
+// says it is ready (or failed); a check throws (assert) to fail. Pages run in UTC with
+// Date fixed at 12:00 (timers keep running), so the light is the day's; atClock(page, h)
+// moves it. The page's test hooks
 // are on window.__pond; web/src/main.js documents them.
 import { createServer } from 'node:http';
 import { mkdir, readFile } from 'node:fs/promises';
@@ -41,6 +44,10 @@ const SCREENSHOTS = {
   detail: join(SCREENSHOT_DIR, 'site-floor-detail.png'),
   // Food on the water with a ripple, the koi heading to it.
   feed: join(SCREENSHOT_DIR, 'site-feed-desktop.png'),
+  // The pond by the clock: 02:00 and 18:00.
+  'night-desktop': join(SCREENSHOT_DIR, 'site-night-desktop.png'),
+  'night-phone': join(SCREENSHOT_DIR, 'site-night-phone.png'),
+  'dusk-desktop': join(SCREENSHOT_DIR, 'site-dusk-desktop.png'),
 };
 
 // Pre-flight: without the wasm build every page check would only time out.
@@ -86,6 +93,12 @@ function serve() {
     }
   });
   return new Promise((done) => server.listen(0, '127.0.0.1', () => done(server)));
+}
+
+// The page's Date fixed at the given UTC hour (and minute, second) of one day; timers and
+// requestAnimationFrame keep running. Pages run with timezoneId UTC, so this is local time.
+function atClock(page, hours, minutes = 0, seconds = 0) {
+  return page.clock.setFixedTime(Date.UTC(2026, 10, 9, hours, minutes, seconds));
 }
 
 const checks = [];
@@ -1146,7 +1159,8 @@ check('a ripple spreads at 24 px a second and fades out in a second', ['desktop'
     assert.ok(Math.abs(seen.r - expected) <= 2.5, `radius ${seen.r} at ${Math.round(seen.age)} ms, expected about ${expected.toFixed(1)}`);
   }
   // The ring lives 1000 ms: from the 750 ms sample it is gone within about 500 ms.
-  await page.waitForFunction(() => window.__pond.ripples().length === 0, null, { polling: 20, timeout: 500 });
+  // Only the drop's ring: a gulp ring can legitimately outlive it.
+  await page.waitForFunction(() => window.__pond.ripples().every((r) => r.kind !== 'drop'), null, { polling: 20, timeout: 500 });
   assert.deepEqual(errors, []);
 });
 
@@ -1263,6 +1277,148 @@ check('slow devices draw the koi less often', ['desktop'], async ({ page, errors
   assert.deepEqual(errors, []);
 });
 
+// The light (web/src/lighting.js).
+
+// phaseAt alone, in Node: the grade at noon and at 2 a.m., and no step between seconds.
+check('the light follows the clock', [], async () => {
+  const { phaseAt } = await import(pathToFileURL(join(WEB_ROOT, 'src', 'lighting.js')).href);
+  const at = (hours, minutes = 0, seconds = 0) => phaseAt(new Date(2026, 10, 9, hours, minutes, seconds));
+  const noon = at(12);
+  assert.equal(noon.night, 0);
+  assert.equal(noon.grade.mode, 'multiply');
+  assert.ok(noon.grade.a <= 0.05, `day is near-identity (alpha ${noon.grade.a})`);
+  const night = at(2);
+  assert.equal(night.night, 1);
+  assert.deepEqual(night.grade, { r: 30, g: 45, b: 90, a: 0.55, mode: 'multiply' });
+  assert.equal(night.lift.a, 0, 'no screen lift at night');
+  // Channels as fractions (color / 255, alpha as is), so one tolerance fits all.
+  const channels = (phase) => [
+    phase.grade.r / 255, phase.grade.g / 255, phase.grade.b / 255, phase.grade.a,
+    phase.lift.r / 255, phase.lift.g / 255, phase.lift.b / 255, phase.lift.a, phase.night,
+  ];
+  const jump = (a, b) => Math.max(...channels(a).map((value, index) => Math.abs(value - channels(b)[index])));
+  // Review Focus 4: a visitor on the 17:00 boundary gets a blend, with no flash.
+  const [before, on, after] = [at(16, 59, 59), at(17), at(17, 0, 1)];
+  assert.ok(jump(before, on) <= 0.02 && jump(on, after) <= 0.02, `17:00 steps ${jump(before, on)}, ${jump(on, after)}`);
+  assert.ok(on.grade.a > 0 && on.grade.a < at(18).grade.a, `17:00 is halfway into dusk (alpha ${on.grade.a})`);
+  // Every boundary blends over 20 minutes: nothing moves outside the windows, and every
+  // second inside them moves only a little.
+  for (const hour of [5, 7, 17, 19]) {
+    assert.ok(jump(at(hour - 1, 49, 59), at(hour - 1, 45)) === 0, `${hour}:00 has not started at -10 min`);
+    assert.ok(jump(at(hour, 10, 1), at(hour, 15)) === 0, `${hour}:00 has finished at +10 min`);
+  }
+  let worst = 0;
+  for (let second = 0; second < 86400; second += 1) {
+    worst = Math.max(worst, jump(phaseAt(new Date(2026, 10, 9, 0, 0, second)), phaseAt(new Date(2026, 10, 9, 0, 0, second + 1))));
+  }
+  assert.ok(worst <= 0.02, `the largest step between seconds is ${worst}`);
+  for (const hour of [6, 18]) assert.ok(at(hour).lift.a > 0, `a soft screen lift at ${hour}:00`);
+  assert.ok(at(18).night === 0 && at(6).night === 0, 'dawn and dusk are not night');
+  assert.ok(at(19).night > 0.4 && at(19).night < 0.6 && at(5).night > 0.4 && at(5).night < 0.6, 'night fades in and out on its boundaries');
+});
+
+// The mean brightness of the visible canvas, sampled on a grid.
+function meanBrightness(page) {
+  return page.evaluate(() => {
+    const canvas = document.getElementById('pond');
+    const { data } = canvas.getContext('2d').getImageData(0, 0, canvas.width, canvas.height);
+    let sum = 0;
+    let count = 0;
+    for (let index = 0; index < data.length; index += 4 * 7) {
+      sum += (data[index] + data[index + 1] + data[index + 2]) / 3;
+      count += 1;
+    }
+    return sum / count;
+  });
+}
+
+// A few frames after the page's clock moves, so the light has followed.
+async function settleLight(page) {
+  const frames = await page.evaluate(() => window.__pond.frames);
+  await page.waitForFunction((count) => window.__pond.frames > count + 3, frames, { timeout: 5000 });
+}
+
+check('night darkens the pond and lights the fireflies', BOTH, async ({ page, errors, open }) => {
+  assert.equal(await open(), null);
+  await padTargets(page);
+  await settleLight(page);
+  const day = await page.evaluate(() => ({ phase: window.__pond.phase, fireflies: window.__pond.fireflies }));
+  assert.equal(day.phase?.night, 0, 'noon is day');
+  assert.equal(day.fireflies, 0, 'no fireflies by day');
+  const dayMean = await meanBrightness(page);
+  await atClock(page, 2);
+  await settleLight(page);
+  const night = await page.evaluate(() => ({ phase: window.__pond.phase, fireflies: window.__pond.fireflies }));
+  assert.equal(night.phase?.night, 1, '02:00 is night');
+  assert.equal(night.fireflies, 10, 'ten fireflies at night');
+  const nightMean = await meanBrightness(page);
+  console.log(`      mean brightness: day ${dayMean.toFixed(1)}, night ${nightMean.toFixed(1)} (${Math.round((1 - nightMean / dayMean) * 100)}% darker)`);
+  assert.ok(nightMean <= dayMean * 0.75, `night mean ${nightMean.toFixed(1)} vs day ${dayMean.toFixed(1)}`);
+  // Back to day: the fireflies go.
+  await atClock(page, 12);
+  await settleLight(page);
+  assert.equal(await page.evaluate(() => window.__pond.fireflies), 0);
+  assert.deepEqual(errors, []);
+});
+
+check('fireflies drift, and hold still under reduced motion', ['desktop'], async ({ page, errors, open }) => {
+  await atClock(page, 2);
+  assert.equal(await open(), null);
+  await settleLight(page);
+  const watch = async () => {
+    const seen = [];
+    for (let index = 0; index < 12; index += 1) {
+      seen.push(await page.evaluate(() => window.__pond.fireflySpots()));
+      await page.waitForTimeout(100);
+    }
+    return seen;
+  };
+  const spots = (seen) => new Set(seen.map((each) => JSON.stringify(each.map(({ x, y }) => [x, y])))).size;
+  const blinks = (seen) => new Set(seen.map((each) => each.map(({ frame }) => frame).join(''))).size;
+  const top = await page.evaluate(() => Math.ceil(window.__pond.state.headerHeight / window.__pond.view.scale));
+  const moving = await watch();
+  assert.ok(spots(moving) > 1, 'fireflies drift');
+  assert.ok(blinks(moving) > 1, 'fireflies blink');
+  for (const each of moving.flat()) assert.ok(each.y - 2 > top, `a firefly at y ${each.y} clears the header (${top})`);
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  await page.waitForTimeout(100);
+  const still = await watch();
+  assert.equal(spots(still), 1, 'reduced motion holds the fireflies still');
+  assert.ok(blinks(still) > 1, 'and they still blink');
+  assert.equal(still[0].length, 10);
+  assert.deepEqual(errors, []);
+});
+
+check('the page edge follows the light', ['desktop'], async ({ page, errors, open }) => {
+  assert.equal(await open(), null);
+  await resizeAndSettle(page, { width: 1601, height: 901 });
+  const colors = () => page.evaluate(() => {
+    const canvas = document.getElementById('pond');
+    const [r, g, b] = canvas.getContext('2d').getImageData(canvas.width - 1, canvas.height - 1, 1, 1).data;
+    return { pond: `rgb(${r}, ${g}, ${b})`, page: getComputedStyle(document.documentElement).backgroundColor };
+  });
+  await settleLight(page);
+  const day = await colors();
+  assert.equal(day.page, day.pond);
+  await atClock(page, 2);
+  await settleLight(page);
+  const night = await colors();
+  assert.notEqual(night.pond, day.pond, 'the night grade reaches the corner');
+  assert.equal(night.page, night.pond, 'the page edge is sampled again');
+  assert.deepEqual(errors, []);
+});
+
+check('the light costs little a frame', ['desktop'], async ({ page, open }) => {
+  await atClock(page, 2);
+  assert.equal(await open(), null);
+  await settleLight(page);
+  assert.ok(await page.evaluate(() => window.__pond.layers.some((layer) => layer.name === 'lighting')), 'a lighting layer');
+  const cost = await page.evaluate(() => window.__pond.layerCost(['lighting'], { runs: 5, count: 60 }));
+  const added = cost.layers - cost.calibration;
+  console.log(`      lighting at night: ${cost.layers.toFixed(3)} ms a frame, one plain blit ${cost.calibration.toFixed(3)} ms, added ${added.toFixed(3)} ms`);
+  assert.ok(added < 1.5, `lighting adds ${added.toFixed(3)} ms a frame beyond one blit`);
+});
+
 // ---------------------------------------------------------------------------------------
 
 const only = argument('--only');
@@ -1272,8 +1428,11 @@ const browser = await chromium.launch();
 let failed = 0;
 
 async function newPage(size) {
-  const context = await browser.newContext(SIZES[size]);
+  // Every page runs in UTC with its clock (Date only; timers run) fixed at noon, so the
+  // light is the day's whenever the suite runs. A check may move it with atClock().
+  const context = await browser.newContext({ timezoneId: 'UTC', ...SIZES[size] });
   const page = await context.newPage();
+  await atClock(page, 12);
   const errors = [];
   page.on('pageerror', (error) => errors.push(error.message));
   page.on('console', (message) => {
@@ -1353,6 +1512,23 @@ if (!only) {
     console.log(`FAIL  screenshot [feed]\n      ${error.message ?? error}`);
   } finally {
     await feedSession.context.close();
+  }
+  // The light: night on both sizes, dusk on the desktop.
+  for (const [shot, size, hour] of [['night-desktop', 'desktop', 2], ['night-phone', 'phone', 2], ['dusk-desktop', 'desktop', 18]]) {
+    const session = await newPage(size);
+    try {
+      await atClock(session.page, hour);
+      assert.equal(await session.open(), null);
+      await padTargets(session.page);
+      await session.page.waitForTimeout(1500);
+      await session.page.screenshot({ path: SCREENSHOTS[shot] });
+      console.log(`screenshot: ${SCREENSHOTS[shot]}`);
+    } catch (error) {
+      failed += 1;
+      console.log(`FAIL  screenshot [${shot}]\n      ${error.message ?? error}`);
+    } finally {
+      await session.context.close();
+    }
   }
   // The detail crop: a 4× context, clipped to the region floor.js names (a rock beside a
   // plant clump, away from the header).
