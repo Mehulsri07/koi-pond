@@ -284,14 +284,48 @@ if (SERVING_BUILD) {
   });
 }
 
+check('on Pages a missing snapshot shows the data error, not the fixture fallback\'s', ['desktop'], async ({ page, open }) => {
+  // Production has no fixtures/ either, so both 404; the reason shown is the data one.
+  await page.route('**/data/snapshot.json', (route) => route.fulfill({ status: 404, body: '' }));
+  await page.route('**/fixtures/snapshot.json', (route) => route.fulfill({ status: 404, body: '' }));
+  assert.ok(await open(''));
+  const text = await page.locator('#message').innerText();
+  assert.match(text, /The pond's data could not be read/);
+  assert.match(text, /data\/snapshot\.json: HTTP 404/);
+  assert.doesNotMatch(text, /fixtures/);
+});
+
+check('a repo link that is not on github.com gets no href', ['desktop'], async ({ page, open }) => {
+  assert.equal(await open(), null);
+  const result = await page.evaluate(async () => {
+    const { createCard } = await import('/src/card.js');
+    const root = document.createElement('div');
+    document.body.append(root);
+    const pad = { repo: 'x/y', commits: 1, language: null, languageColor: null };
+    const card = createCard(root);
+    const links = {};
+    for (const url of ['javascript:alert(1)', 'http://github.com/x/y', 'https://evil.example/x', 'https://github.com/x/y']) {
+      card.show({ ...pad, url }, 10, 10, { interactive: true });
+      links[url] = root.querySelector('a')?.getAttribute('href') ?? null;
+    }
+    return links;
+  });
+  assert.equal(result['javascript:alert(1)'], null);
+  assert.equal(result['http://github.com/x/y'], null);
+  assert.equal(result['https://evil.example/x'], null);
+  assert.equal(result['https://github.com/x/y'], 'https://github.com/x/y');
+});
+
 check('the snapshot falls back to the fixture only when missing', ['desktop'], async ({ page, errors, open }) => {
   const requested = [];
   page.on('request', (request) => requested.push(new URL(request.url()).pathname));
-  // Without ?fixture: data/snapshot.json is missing in this repo, so the fixture loads.
-  // (In a build, dist/data/snapshot.json exists, so the fixture is not fetched.)
+  // Without ?fixture and with data/snapshot.json missing (routed to 404 here, so the check
+  // holds whether or not the served root has the nightly snapshot), the fixture loads.
+  await page.route('**/data/snapshot.json', (route) => route.fulfill({ status: 404, body: '' }));
   assert.equal(await open(''), null);
   assert.ok(requested.includes('/data/snapshot.json'));
-  assert.equal(requested.includes('/fixtures/snapshot.json'), !SERVING_BUILD);
+  assert.ok(requested.includes('/fixtures/snapshot.json'));
+  await page.unroute('**/data/snapshot.json');
   // A data/snapshot.json that exists is used, and the fixture is not fetched.
   const fixture = await readFile(join(WEB_ROOT, 'fixtures', 'snapshot.json'), 'utf8');
   await page.route('**/data/snapshot.json', (route) =>

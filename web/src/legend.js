@@ -5,6 +5,7 @@
 // The panel redraws when it opens and, while open, once a second (for the clock line), but
 // only when its text would change, so focus on a repo link is never lost.
 
+import { repoUrl } from './url.js';
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 const number = (value) => Number(value).toLocaleString('en-US');
 
@@ -86,7 +87,7 @@ export function renderLegend(legend, pads, phase, renderMode, body = document.ge
   for (const each of [...pads].sort((a, b) => b.commits - a.commits)) {
     const item = element('li');
     const short = String(each.repo).split('/').filter(Boolean).pop() ?? String(each.repo);
-    const name = each.url ? element('a', short, { href: each.url, target: '_blank', rel: 'noopener' }) : element('span', short);
+    const name = repoUrl(each.url) ? element('a', short, { href: repoUrl(each.url), target: '_blank', rel: 'noopener' }) : element('span', short);
     name.classList.add('legend-repo');
     item.append(name, element('span', `${each.language ?? 'no language'} · ${number(each.commits)} ${each.commits === 1 ? 'commit' : 'commits'}`, { class: 'legend-meta' }));
     repos.append(item);

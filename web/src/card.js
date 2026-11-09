@@ -17,6 +17,7 @@
 // link (target _blank, rel noopener) when the pad has a url. Every text goes in with
 // textContent and every attribute with setAttribute, never as markup.
 
+import { repoUrl } from './url.js';
 const GAP = 14; // px between the pointer and the card
 const MARGIN = 8; // px kept clear at the viewport's edges
 const NEUTRAL_DOT = '#8a9a96';
@@ -42,9 +43,9 @@ export function createCard(root = document.getElementById('pad-card')) {
     language.append(dot, document.createTextNode(pad.language ?? 'No language'));
     const commits = element('p', 'pad-card-commits', `${pad.commits} ${pad.commits === 1 ? 'commit' : 'commits'} by Mehul`);
     const children = [title, language, commits];
-    if (pad.url) {
+    if (repoUrl(pad.url)) {
       const link = element('a', 'pad-card-link', 'Open repo');
-      link.setAttribute('href', pad.url);
+      link.setAttribute('href', repoUrl(pad.url));
       link.setAttribute('target', '_blank');
       link.setAttribute('rel', 'noopener');
       children.push(link);

@@ -26,8 +26,9 @@ wasm-bindgen --target web --no-typescript --out-dir web/pkg \
   target/wasm32-unknown-unknown/release/pond_wasm.wasm
 ls -l web/pkg
 
-node scripts/art.mjs
+# Check the committed grids and PNGs first, so drift fails CI instead of being papered over.
 node scripts/art.mjs --check
+node scripts/art.mjs
 
 # dist/ is exactly what GitHub Pages serves. It has no fixtures/: on Pages a missing
 # data/snapshot.json must show the data error, never sample data. web/data/snapshot.json is

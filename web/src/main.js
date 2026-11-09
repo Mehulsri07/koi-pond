@@ -488,14 +488,21 @@ async function fetchText(path) {
 }
 
 async function loadSnapshotText() {
+  let missing = null;
   if (!params.has('fixture')) {
     try {
       return await fetchText('data/snapshot.json');
     } catch (error) {
       if (error.status !== 404) throw error;
+      missing = error;
     }
   }
-  return fetchText('fixtures/snapshot.json');
+  try {
+    return await fetchText('fixtures/snapshot.json');
+  } catch (error) {
+    // On Pages there is no fixture: the reason worth showing is the missing data/snapshot.json.
+    throw missing ?? error;
+  }
 }
 
 // The glue is imported here, not at the top, so a missing or blocked pkg still shows a

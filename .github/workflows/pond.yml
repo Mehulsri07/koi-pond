@@ -1,20 +1,20 @@
-# Nightly: collect Mehulsri07's GitHub snapshot, build the pond, deploy it to GitHub Pages.
+# Nightly: collect Mehulsri07's GitHub snapshot, commit it, build the pond, deploy to Pages.
 # One workflow, because a commit pushed with the workflow token does not trigger other
-# workflows. The default branch is never named here: it is whatever the repository's default is.
+# workflows. The default branch is never named: a schedule event carries no
+# github.event.repository, so collect asks the API and passes the branch and the exact
+# commit down as job outputs.
+#
+# Job graph:  collect -> commit -> build -> deploy   (schedule, manual)
+#                        build -> deploy             (push to the default branch)
 name: pond
 
 on:
   schedule:
     - cron: "20 0 * * *"
   workflow_dispatch:
-  # Expressions are not allowed in the trigger, so every push starts a run and the jobs
-  # below stay out of it unless the push is to the default branch.
+  # Expressions are not allowed in the trigger, so every push starts a run; a push to any
+  # other branch or a tag skips every job below.
   push:
-
-# Never cancel a run in flight: a half-finished deploy is worse than a queued one.
-concurrency:
-  group: pond
-  cancel-in-progress: false
 
 permissions: {}
 
@@ -22,17 +22,28 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  # Compiles and runs third-party code, so it only reads: no push credentials, and the
+  # snapshot leaves as an artifact.
   collect:
-    # Schedule and manual runs only; a push builds the committed snapshot.
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     permissions:
-      contents: write
+      contents: read
+    outputs:
+      branch: ${{ steps.branch.outputs.branch }}
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
-          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+      - name: Resolve the default branch
+        id: branch
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT_NAME: ${{ github.event_name }}
+          REF_NAME: ${{ github.ref_name }}
+        run: scripts/resolve-branch.sh
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable branch
+        id: rust
         with:
           toolchain: stable
       - name: Cache cargo
@@ -42,7 +53,9 @@ jobs:
             ~/.cargo/bin
             ~/.cargo/registry
             ~/.cargo/git
-          key: collect-${{ runner.os }}-${{ hashFiles('crates/pond-wasm/Cargo.toml') }}
+          key: collect-${{ runner.os }}-${{ steps.rust.outputs.cachekey }}-${{ hashFiles('crates/pond-wasm/Cargo.toml') }}
+          restore-keys: |
+            collect-${{ runner.os }}-${{ steps.rust.outputs.cachekey }}-
       - name: Install git-koi at the pinned rev
         run: |
           rev=$(sed -n 's/^git-koi = .*rev = "\([0-9a-f]\{40\}\)".*/\1/p' crates/pond-wasm/Cargo.toml)
@@ -52,41 +65,66 @@ jobs:
       - name: Collect the snapshot
         env:
           GH_TOKEN: ${{ github.token }}
-        run: |
-          mkdir -p web/data
-          git-koi collect Mehulsri07 --output web/data/snapshot.json
+        run: git-koi collect Mehulsri07 --output "$RUNNER_TEMP/snapshot.json"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: snapshot
+          path: ${{ runner.temp }}/snapshot.json
+          if-no-files-found: error
+          retention-days: 1
+
+  # The only job that can push. It runs no third-party code beyond actions.
+  commit:
+    needs: collect
+    if: ${{ !cancelled() && needs.collect.result == 'success' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    concurrency:
+      group: pond-commit
+      cancel-in-progress: false
+    outputs:
+      branch: ${{ steps.commit.outputs.branch }}
+      sha: ${{ steps.commit.outputs.sha }}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          ref: ${{ needs.collect.outputs.branch }}
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: snapshot
+          path: ${{ runner.temp }}/snapshot
       - name: Commit the snapshot if it changed
-        run: |
-          git add web/data/snapshot.json
-          if git diff --cached --quiet; then
-            echo "snapshot unchanged; nothing to commit"
-            exit 0
-          fi
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git commit -m "data: nightly snapshot $(date -u +%Y-%m-%d)"
-          git push origin "HEAD:${{ github.event.repository.default_branch }}"
+        id: commit
+        env:
+          BRANCH: ${{ needs.collect.outputs.branch }}
+          SNAPSHOT: ${{ runner.temp }}/snapshot/snapshot.json
+        run: scripts/commit-snapshot.sh
 
   build:
-    needs: collect
-    # Run after a successful collect, or when collect was skipped (a push); never after a
-    # failed or cancelled collect, so a failed collect fails the run and deploys nothing.
-    # A push to any other branch skips everything.
+    needs: [collect, commit]
+    # After a commit job that succeeded (schedule, manual), or on a push to the default
+    # branch, where collect and commit are skipped. Never after a failed collect or commit,
+    # so a failed collect fails the run and deploys nothing. A push to another branch or a
+    # tag skips everything.
     if: >-
       ${{ !cancelled()
-      && (needs.collect.result == 'success'
+      && (needs.commit.result == 'success'
       || (needs.collect.result == 'skipped'
       && github.event_name == 'push'
-      && github.ref_name == github.event.repository.default_branch)) }}
+      && github.ref == format('refs/heads/{0}', github.event.repository.default_branch))) }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
     steps:
-      # The latest default-branch head, so the collect job's commit is included.
+      # The exact commit the commit job left on the branch (so the snapshot is included),
+      # or the pushed commit on a push run, where commit is skipped and its output is empty.
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
-          ref: ${{ github.event.repository.default_branch }}
+          ref: ${{ needs.commit.outputs.sha || github.sha }}
+          persist-credentials: false
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable branch
+        id: rust
         with:
           toolchain: stable
           targets: wasm32-unknown-unknown
@@ -101,7 +139,9 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: build-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
+          key: build-${{ runner.os }}-${{ steps.rust.outputs.cachekey }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            build-${{ runner.os }}-${{ steps.rust.outputs.cachekey }}-
       - name: Install wasm-bindgen-cli at the lockfile's version
         run: |
           version=$(scripts/build.sh --wasm-bindgen-version)
@@ -116,22 +156,30 @@ jobs:
 
   deploy:
     needs: build
+    # needs.build alone is not enough: with collect skipped (a push run) the implicit
+    # success() is false for a grandchild job, so say what we mean.
+    if: ${{ !cancelled() && needs.build.result == 'success' }}
     runs-on: ubuntu-latest
     permissions:
       pages: write
       id-token: write
+    concurrency:
+      group: pond
+      cancel-in-progress: false
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
       # actions/deploy-pages fails with a cryptic error when Pages is off, so say what to
       # do first. A failed check only annotates; the deploy step below is what decides.
-      - name: Check that GitHub Pages is enabled
+      - name: Check that GitHub Pages is enabled for Actions
         env:
           GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
         run: |
-          if ! gh api "repos/${{ github.repository }}/pages" --silent 2>/dev/null; then
-            echo "::error title=GitHub Pages is not enabled::Enable GitHub Pages: Settings → Pages → Source: GitHub Actions, then re-run this workflow. The deploy step below will fail until then."
+          build_type=$(gh api "repos/$REPO/pages" --jq .build_type 2>/dev/null || true)
+          if [ "$build_type" != "workflow" ]; then
+            echo "::error title=GitHub Pages is not set to GitHub Actions::Enable GitHub Pages: Settings → Pages → Source: GitHub Actions, then re-run this workflow. The deploy step below will fail until then."
           fi
       - id: deployment
         uses: actions/deploy-pages@d6db90164ac5ed86f2b6aed7e0febac5b3c0c03e # v4.0.5

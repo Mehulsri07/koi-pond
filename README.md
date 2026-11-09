@@ -78,19 +78,27 @@ The site is [mehulsri07.github.io/koi-pond](https://mehulsri07.github.io/koi-pon
 `.github/workflows/pond.yml` runs at 00:20 UTC daily, on manual dispatch, and on every push
 to the default branch:
 
-1. **collect** (schedule and dispatch only) installs git-koi at the rev pinned in
-   `crates/pond-wasm/Cargo.toml` (read from that file, not repeated), runs
-   `git-koi collect Mehulsri07 --output web/data/snapshot.json`, and commits as
-   `github-actions[bot]` only if the file changed.
-2. **build** checks out the latest default-branch head (so it includes that commit), runs
-   `scripts/build.sh`, and uploads `dist/`.
-3. **deploy** publishes it with `actions/deploy-pages`.
+1. **collect** (schedule and dispatch only; `contents: read`, no push credentials, because it
+   compiles third-party code) resolves the default branch through the API (a schedule event
+   carries none), installs git-koi at the rev pinned in `crates/pond-wasm/Cargo.toml` (read
+   from that file, not repeated), runs `git-koi collect Mehulsri07`, and uploads the snapshot
+   as an artifact. A manual run started from a non-default branch fails early.
+2. **commit** (`contents: write`; `scripts/commit-snapshot.sh`) commits the snapshot as
+   `github-actions[bot]` only if it changed, rebasing and retrying once if the branch moved,
+   and outputs the exact commit the branch ends on.
+3. **build** checks out that exact commit (or the pushed commit on a push run, where collect
+   and commit are skipped), runs `scripts/build.sh`, and uploads `dist/`.
+4. **deploy** publishes it with `actions/deploy-pages`, in concurrency group `pond` (never
+   cancelling a deploy in flight).
 
 A failed collect fails the run (GitHub emails the owner) and nothing deploys, so the
 previous snapshot stays live. A push runs build and deploy only.
 
 **One manual step:** Settings → Pages → Source: GitHub Actions. Until then deploy fails (the
 job logs say so).
+
+Actions are pinned to full SHAs at their current major versions; GitHub's Node 20
+deprecation annotations on them are expected for now.
 
 The workflow never names the default branch: the push trigger runs on every branch and the
 jobs proceed only for the repository's default branch (`github.event.repository.default_branch`),

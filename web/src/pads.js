@@ -60,6 +60,7 @@
 //   - A click or tap on water calls onWaterTap(x, y) in pond pixels; one on a pad never
 //     does.
 import { createRandom, seedOf } from './rand.js';
+import { repoUrl } from './url.js';
 
 export const name = 'pads';
 
@@ -453,7 +454,7 @@ export function attachInput(canvas, { getState, onWaterTap, onPadTap = () => {},
     if (event.pointerType === 'touch') return;
     const { x, y } = pondPoint(event);
     const pad = padAt(x, y);
-    canvas.style.cursor = pad?.url ? 'pointer' : '';
+    canvas.style.cursor = repoUrl(pad?.url) ? 'pointer' : '';
     if (pad === hovered) return;
     hovered = pad;
     if (pad) card.show(pad, event.clientX, event.clientY, { interactive: false });
@@ -486,7 +487,7 @@ export function attachInput(canvas, { getState, onWaterTap, onPadTap = () => {},
       }
       card.hide();
     } else if (pad) {
-      if (pad.url) window.open(pad.url, '_blank', 'noopener');
+      if (repoUrl(pad.url)) window.open(repoUrl(pad.url), '_blank', 'noopener');
       return;
     }
     onWaterTap(Math.floor(x), Math.floor(y));
