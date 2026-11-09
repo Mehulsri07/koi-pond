@@ -422,6 +422,38 @@ check('every repo is a link in the legend', BOTH, async ({ page, errors, open })
   assert.deepEqual(errors, []);
 });
 
+check('the legend stays put when the minute changes', ['phone'], async ({ page, errors, open }) => {
+  assert.equal(await open(), null);
+  await openLegend(page);
+  const last = page.locator('#legend-body .legend-repos a').last();
+  await last.focus();
+  await page.evaluate(() => {
+    const link = document.activeElement;
+    window.__link = link;
+    document.getElementById('legend').scrollTop = 40;
+    const list = document.querySelector('#legend-body .legend-repos');
+    list.scrollTop = 5;
+    window.__before = { panel: document.getElementById('legend').scrollTop, list: list.scrollTop };
+    getSelection().selectAllChildren(document.querySelector('#legend-body .legend-section p'));
+    window.__selection = getSelection().toString();
+  });
+  await atClock(page, 12, 1);
+  await page.waitForFunction(() => document.getElementById('legend-body').textContent.includes('Day · 12:01 your time'), null, { timeout: 4000 });
+  const after = await page.evaluate(() => ({
+    same: document.activeElement === window.__link && window.__link.isConnected,
+    panel: document.getElementById('legend').scrollTop,
+    list: document.querySelector('#legend-body .legend-repos').scrollTop,
+    before: window.__before,
+    selection: getSelection().toString(),
+    selectionBefore: window.__selection,
+  }));
+  assert.ok(after.same, 'the focused link is the same element and still focused');
+  assert.equal(after.panel, after.before.panel, 'panel scroll kept');
+  assert.equal(after.list, after.before.list, 'repos scroll kept');
+  assert.equal(after.selection, after.selectionBefore, 'selection kept');
+  assert.deepEqual(errors, []);
+});
+
 check('a hostile repo name is text in the legend', ['desktop'], async ({ page, errors, open }) => {
   const fixture = JSON.parse(await readFile(join(WEB_ROOT, 'fixtures', 'snapshot.json'), 'utf8'));
   fixture.owned_repositories[0].name_with_owner = 'Mehulsri07/<img src=x onerror=window.__xss=1>';

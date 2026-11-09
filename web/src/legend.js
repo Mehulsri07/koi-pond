@@ -16,12 +16,13 @@ export function formatDate(iso) {
 }
 
 export function moodLine(reason) {
-  const value = reason?.value;
+  const known = typeof reason?.value === 'number' && Number.isFinite(reason.value);
+  const value = known ? reason.value : null;
   switch (reason?.rule) {
-    case 'deep_rest': return `Deep rest: ${number(value ?? 60)}${value == null ? '+' : ''} quiet days`;
-    case 'rest': return `Resting: ${number(value)} quiet days`;
+    case 'deep_rest': return known ? `Deep rest: ${number(value)} quiet days` : 'Deep rest: 60+ quiet days';
+    case 'rest': return known ? `Resting: ${number(value)} quiet days` : 'Resting';
     case 'first_contribution_of_week': return 'Feeding at the surface: first contribution this week';
-    case 'crossed_milestone': return `Darting: crossed ${number(value)} contributions this week`;
+    case 'crossed_milestone': return known ? `Darting: crossed ${number(value)} contributions this week` : 'Darting: crossed a milestone this week';
     case 'busy_week': return 'Darting: busiest week in a year';
     default: return 'Cruising';
   }
@@ -84,7 +85,7 @@ export function renderLegend(legend, pads, phase, renderMode, body = document.ge
   const repos = element('ul', null, { class: 'legend-repos' });
   for (const each of [...pads].sort((a, b) => b.commits - a.commits)) {
     const item = element('li');
-    const short = String(each.repo).split('/').pop();
+    const short = String(each.repo).split('/').filter(Boolean).pop() ?? String(each.repo);
     const name = each.url ? element('a', short, { href: each.url, target: '_blank', rel: 'noopener' }) : element('span', short);
     name.classList.add('legend-repo');
     item.append(name, element('span', `${each.language ?? 'no language'} · ${number(each.commits)} ${each.commits === 1 ? 'commit' : 'commits'}`, { class: 'legend-meta' }));
@@ -92,7 +93,7 @@ export function renderLegend(legend, pads, phase, renderMode, body = document.ge
   }
   section('Repos', repos);
 
-  section('Light', element('p', lightLine(phase, now)));
+  section('Light', element('p', lightLine(phase, now), { class: 'legend-light' }));
   section('Data',
     element('p', renderMode === '20-per-second' ? 'Koi drawn 20 times a second on this device' : 'Koi drawn every frame'),
     element('p', `Data from ${formatDate(legend.observedOn)}, refreshed nightly.`));
@@ -115,10 +116,17 @@ export function setupLegend({
     const state = getState?.();
     if (!state?.legend) return;
     const now = new Date();
-    const key = JSON.stringify([state.legend, state.pads, state.phase?.name, state.renderMode, now.getHours(), now.getMinutes()]);
-    if (key === shownKey) return;
-    shownKey = key;
-    renderLegend(state.legend, state.pads, state.phase, state.renderMode, body, now);
+    // A full redraw only when what the legend describes changes; a new minute or phase
+    // updates just the light line, so focus, selection and scroll stay put.
+    const key = JSON.stringify([state.legend, state.pads, state.renderMode]);
+    if (key !== shownKey) {
+      shownKey = key;
+      renderLegend(state.legend, state.pads, state.phase, state.renderMode, body, now);
+      return;
+    }
+    const light = body.querySelector('.legend-light');
+    const text = lightLine(state.phase, now);
+    if (light && light.textContent !== text) light.textContent = text;
   }
 
   const isOpen = () => panel.classList.contains('open');

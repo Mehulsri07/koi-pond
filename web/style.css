@@ -185,7 +185,14 @@ html, body {
 }
 .legend-name { flex: 1; overflow-wrap: anywhere; }
 .legend-num, .legend-meta { font-variant-numeric: tabular-nums; }
-.legend-repos { max-height: 11em; overflow-y: auto; }
+.legend-body .legend-repos {
+  max-height: 16em;
+  padding-bottom: 14px;
+  overflow-y: auto;
+  /* A soft fade at the bottom edge shows there is more when the list overflows. */
+  -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - 14px), transparent);
+  mask-image: linear-gradient(to bottom, #000 calc(100% - 14px), transparent);
+}
 .legend-repos li { flex-wrap: wrap; column-gap: 8px; row-gap: 0; }
 .legend-repo { font-weight: 600; overflow-wrap: anywhere; }
 .legend-repos a { color: var(--panel-ink); text-decoration: underline; }
