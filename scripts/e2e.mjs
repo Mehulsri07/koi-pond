@@ -994,10 +994,14 @@ async function waterNear(page, near) {
   return page.evaluate(({ x, y }) => {
     const { width, height, mask } = window.__pond.padMask();
     const top = Math.ceil(window.__pond.state.headerHeight / window.__pond.view.scale) + 2;
+    // Not under the header or the legend panel.
+    const covers = ['.site-header', '#legend'].map((selector) => document.querySelector(selector)?.getBoundingClientRect()).filter(Boolean);
+    const scale = window.__pond.view.scale;
+    const covered = (px, py) => covers.some((r) => (px + 0.5) * scale >= r.left && (px + 0.5) * scale <= r.right && (py + 0.5) * scale >= r.top && (py + 0.5) * scale <= r.bottom);
     let best = null;
     for (let py = Math.max(top, 0); py < height; py += 1) {
       for (let px = 0; px < width; px += 1) {
-        if (mask[py * width + px] !== 0) continue;
+        if (mask[py * width + px] !== 0 || covered(px, py)) continue;
         const d = (px - x) ** 2 + (py - y) ** 2;
         if (!best || d < best.d) best = { x: px, y: py, d };
       }
@@ -1019,7 +1023,6 @@ check('the koi eats what you drop', ['desktop'], async ({ page, errors, open }) 
   await padTargets(page);
   const water = await waterBesideKoi(page);
   const targets = { view: await page.evaluate(() => window.__pond.view), water };
-  const started = Date.now();
   await clickWater(page, targets);
   const ring = await page.evaluate(() => window.__pond.ripples().filter((r) => r.kind === 'drop'));
   assert.equal(ring.length, 1, 'a drop ripple appears on the tap');
@@ -1028,7 +1031,6 @@ check('the koi eats what you drop', ['desktop'], async ({ page, errors, open }) 
   await page.waitForFunction(() => window.__pond.foodDrawn(), null, { timeout: 2000 });
   // The gulp: a ring at the food point, and the food sprite gone.
   await page.waitForFunction(() => window.__pond.ripples().some((r) => r.kind === 'gulp'), null, { timeout: 30000, polling: 20 });
-  console.log(`      gulp after ${Date.now() - started} ms`);
   const after = await page.evaluate(() => ({
     gulp: window.__pond.ripples().find((r) => r.kind === 'gulp'),
     food: window.__pond.state.food,
@@ -1143,7 +1145,8 @@ check('a ripple spreads at 24 px a second and fades out in a second', ['desktop'
     assert.ok(seen.diff > 25, `a ring is visible at ${ageMs} ms (diff ${seen.diff})`);
     assert.ok(Math.abs(seen.r - expected) <= 2.5, `radius ${seen.r} at ${Math.round(seen.age)} ms, expected about ${expected.toFixed(1)}`);
   }
-  await page.waitForFunction(() => window.__pond.ripples().length === 0, null, { polling: 20, timeout: 3000 });
+  // Gone a second after it began: from age 750 ms, well within 1.3 s.
+  await page.waitForFunction(() => window.__pond.ripples().length === 0, null, { polling: 20, timeout: 1300 });
   assert.deepEqual(errors, []);
 });
 
@@ -1165,6 +1168,31 @@ check('the render-time decision survives pauses and warm-up', [], async () => {
   assert.equal(run(paused), 'every-frame', 'a pause does not lock the slow mode');
   // Too few frames to judge: no decision after 2 s of 3 frames.
   assert.equal(run([[0, 40], [1000, 40], [2100, 40]]), null, 'few samples decide nothing');
+  // A very slow device: 300 ms renders make every frame start 316 ms after the last, but
+  // the render is not idle time. One render over 100 ms decides at once.
+  const crawl = Array.from({ length: 12 }, (_, i) => [i * 316, 300]);
+  assert.equal(run(crawl), '20-per-second', '300 ms renders reach a decision');
+  // 90 ms renders every 106 ms: no gap once the render is taken off.
+  assert.equal(run(Array.from({ length: 60 }, (_, i) => [i * 106, 90])), '20-per-second', 'slow renders are not gaps');
+  // A stutter (a 1.5 s stall) every 1.5 s keeps restarting the window; after three it
+  // decides on what it has.
+  const stutter = (cost) => Array.from({ length: 6 }, (_, k) => steady(k * 1500, 40, cost)).flat();
+  assert.equal(run(stutter(3)), 'every-frame', 'a stuttering quick device still decides');
+  assert.equal(run(stutter(15)), '20-per-second', 'and a stuttering slow one');
+});
+
+check('a quick koi is drawn every frame', ['desktop'], async ({ page, errors, open }) => {
+  assert.equal(await open(), null);
+  const sample = () => page.evaluate(() => ({ frames: window.__pond.frames, renders: window.__pond.koiRenders }));
+  const first = await sample();
+  await page.waitForTimeout(1500);
+  const second = await sample();
+  const frames = second.frames - first.frames;
+  assert.ok(frames >= 10);
+  assert.ok(second.renders - first.renders >= 0.9 * frames, `${second.renders - first.renders} renders in ${frames} frames`);
+  await page.waitForTimeout(1500);
+  assert.equal(await page.evaluate(() => window.__pond.renderMode), 'every-frame', 'still every frame once the window has closed');
+  assert.deepEqual(errors, []);
 });
 
 check('a food sprite that fails once loads on the next rebuild', ['desktop'], async ({ page, errors, open }) => {
@@ -1220,7 +1248,6 @@ check('slow devices draw the koi less often', ['desktop'], async ({ page, errors
   const rate = (second.renders - first.renders) / seconds;
   assert.ok(fps >= 25, `the pond keeps drawing (${fps.toFixed(0)} fps)`);
   assert.ok(second.x !== first.x || second.y !== first.y, 'the koi keeps moving');
-  console.log(`      renders ${rate.toFixed(1)}/s at ${fps.toFixed(0)} fps`);
   assert.ok(rate >= 19 && rate <= 21.5 && rate < fps * 0.6, `about 20 koi renders a second (${rate.toFixed(1)} at ${fps.toFixed(0)} fps)`);
   assert.deepEqual(errors, []);
 });

@@ -20,8 +20,9 @@
 // MIN_SAMPLES frames; above SLOW_RENDER_MS the koi is rendered SLOW_RATE times a second
 // instead of every frame. Movement (step) still runs every frame, and between renders the
 // last bitmap is drawn again where it was. A gap of more than MAX_GAP_MS between frames
-// (a hidden tab, a long task) restarts the window, so the jank after a pause cannot
-// decide it.
+// (a hidden tab, a long task) restarts the window (idle time only: the previous render is not part of the gap), so the
+// jank after a pause cannot decide it; after MAX_RESTARTS restarts it decides on what it has,
+// and a single render over CRAWL_RENDER_MS decides "slow" at once.
 //
 // ?slowKoi=<ms> adds that busy-wait (at most MAX_SLOW_KOI_MS) to every render, to try the
 // slow path. It is allowed on the live site: it only slows the tab of whoever put it in
@@ -29,6 +30,8 @@
 const MEASURE_MS = 2000;
 const MIN_SAMPLES = 30;
 const MAX_GAP_MS = 250;
+const CRAWL_RENDER_MS = 100; // one render this slow decides at once
+const MAX_RESTARTS = 3; // gaps after which the window decides on what it has
 const SLOW_RENDER_MS = 12;
 const SLOW_RATE = 20;
 const MAX_SLOW_KOI_MS = 50;
@@ -37,19 +40,36 @@ const MAX_SLOW_KOI_MS = 50;
  * The decision, apart from the clock: record(now, cost) once per frame (ms); it returns
  * "every-frame" or "20-per-second" once it can tell, else null.
  */
-export function createMeter({ windowMs = MEASURE_MS, minSamples = MIN_SAMPLES, maxGapMs = MAX_GAP_MS, slowMs = SLOW_RENDER_MS } = {}) {
+export function createMeter({
+  windowMs = MEASURE_MS,
+  minSamples = MIN_SAMPLES,
+  maxGapMs = MAX_GAP_MS,
+  slowMs = SLOW_RENDER_MS,
+  crawlMs = CRAWL_RENDER_MS,
+  maxRestarts = MAX_RESTARTS,
+} = {}) {
   let start = null;
   let last = null;
+  let lastCost = 0;
   let total = 0;
   let count = 0;
+  let restarts = 0;
+  const verdict = () => (total / count > slowMs ? '20-per-second' : 'every-frame');
   return {
     record(now, cost) {
-      if (last !== null && now - last > maxGapMs) {
+      // One render this slow settles it, whatever else the window holds.
+      if (cost > crawlMs) return '20-per-second';
+      // The gap is idle time between frames: the previous render is not part of it.
+      if (last !== null && now - last - lastCost > maxGapMs) {
+        restarts += 1;
+        // A device that keeps stalling decides on what it has.
+        if (restarts >= maxRestarts && count > 0) return verdict();
         start = null;
         total = 0;
         count = 0;
       }
       last = now;
+      lastCost = cost;
       if (start === null) {
         start = now;
         return null; // the first frame after a start (or a gap) is JIT warm-up
@@ -57,7 +77,7 @@ export function createMeter({ windowMs = MEASURE_MS, minSamples = MIN_SAMPLES, m
       total += cost;
       count += 1;
       if (now - start < windowMs || count < minSamples) return null;
-      return total / count > slowMs ? '20-per-second' : 'every-frame';
+      return verdict();
     },
   };
 }
