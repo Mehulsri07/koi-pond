@@ -19,7 +19,8 @@
 //
 // --check fails if a grid uses a character missing from the legend, if its rows differ
 // in width, if any sprite in SPRITES has no grid (or a grid is not in SPRITES), if a
-// pad's notch line is missing or wrong, if a pad size lacks one of the eight notch
+// pad's notch line is missing or wrong, if a pad sprite is not square with its anchor's
+// x equal to its y (pads are drawn transposed about the anchor), if a pad size lacks one of the eight notch
 // directions, if any PNG pixel is not a palette color or has alpha other than 0 or 255,
 // or if a PNG or sprites.json is missing, left over, or does not match its grid (run the
 // script without --check).
@@ -243,6 +244,11 @@ function main() {
       continue;
     }
     const grid = readGrid(name, legend, problems);
+    // A pad is drawn transposed about its anchor (web/src/pads.js), which keeps it in
+    // place only when the sprite is square and the anchor is on the diagonal.
+    if (name.startsWith('pad-') && (grid.width !== grid.height || grid.anchor[0] !== grid.anchor[1])) {
+      problems.push(`${name}: a pad must be square with its anchor on the diagonal (x === y), not ${grid.width}×${grid.height} at ${grid.anchor}`);
+    }
     images[name] = { ...grid, rgba: rasterize(grid, legend) };
     manifest[name] = { width: grid.width, height: grid.height, anchor: grid.anchor };
     if (grid.notch) Object.assign(manifest[name], { notch: grid.notch, transposedNotch: TRANSPOSED[grid.notch] });

@@ -3,6 +3,7 @@
 //   const koi = create(view, { PondKoi, memory, snapshotJson, body, seed });
 //   koi.rebuild(view)   // a new PondKoi at the new pond size; the old one is freed
 //   koi.step(dt)        // advance dt seconds; true on a gulp
+//   koi.dropFood(x, y)  // put food at a pond point, replacing any already there
 //   koi.drawInto(ctx)   // render the koi and draw it at its top left, in pond pixels
 //   koi.pads()          // pads_json(), parsed
 //   koi.legend()        // legend_json(), parsed
@@ -78,6 +79,9 @@ export function create(view, source) {
     },
     step(dt) {
       return instance.step(dt);
+    },
+    dropFood(x, y) {
+      instance.drop_food(x, y);
     },
     drawInto(ctx) {
       instance.render();

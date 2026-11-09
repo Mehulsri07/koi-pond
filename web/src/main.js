@@ -32,6 +32,11 @@
 // built again on the next settled resize. The frame loop schedules its next frame first,
 // so nothing stops it.
 //
+// Input: taps and clicks on the pond go through web/src/pads.js. A pad shows its card
+// (web/src/card.js) or opens its repo; a tap or click on open water (the notch, a ripple
+// and a bud are water) calls onWaterTap(x, y) in pond pixels, which drops food for the
+// koi. Feeding proper (the pellet, the gulp ripple) is Task 8's, behind the same hook.
+//
 // The page background takes the color of the pond's bottom-right pixel after each
 // rebuild, so the up-to-1 px strip a scale-2 pond leaves at odd viewport sizes blends in.
 //
@@ -63,6 +68,12 @@
 //   causticFrames()    the 16 caustic tiles
 //   causticRegion(frame, width, height)  that frame's light over a larger region
 //   causticLive()      {frame, key, mean}: the live caustic state, to check it is not disturbed
+//   padBuilds          pad layers built since load (web/src/pads.js); one per new layout
+//   padMask()          {width, height, mask, canvas, pads}: the pad layer's hit mask (pad
+//                      index + 1 per pond pixel, 0 for water), its bitmap, and the pads it
+//                      was built for; null before the first build
+//   foodDrops          taps on water since load (onWaterTap calls)
+//   lastFood           {x, y}: where the last one landed, in pond pixels, or null
 //   layerMs            per named layer, a running average of its draw time in the frame
 //                      loop (ms; draw calls only, as the canvas may raster later)
 //   layerCost(names, {runs, count})  {layers, calibration}: ms a frame for the named
@@ -75,9 +86,11 @@ import { computeView } from './view.js';
 import * as koiModule from './koi.js';
 import * as floor from './floor.js';
 import * as caustics from './caustics.js';
+import * as pads from './pads.js';
+import { pageCardInstance } from './card.js';
 import { setupLegend } from './legend.js';
 
-const LAYERS = [floor, caustics, koiModule];
+const LAYERS = [floor, caustics, koiModule, pads];
 
 const BODY = 'black';
 const RESIZE_DEBOUNCE_MS = 300;
@@ -167,6 +180,15 @@ const hooks = {
   },
   causticFrames: () => caustics.frames(),
   causticRegion: (frame, width, height) => caustics.renderRegion(caustics.seedFor(state) ?? 0, frame, width, height),
+  get padBuilds() {
+    return pads.buildCount();
+  },
+  padMask: () => {
+    const built = pads.current();
+    return built ? { width: built.width, height: built.height, mask: built.hitMask, canvas: built.canvas, pads: built.pads } : null;
+  },
+  foodDrops: 0,
+  lastFood: null,
   layerMs: {},
   layerCost: (names, count) => layerCost(names, count),
 };
@@ -331,6 +353,18 @@ function layerCost(names, { runs = 5, count = 60 } = {}) {
   }
 }
 
+// A tap or click on open water, in pond pixels. Task 8 builds feeding on this hook.
+function onWaterTap(x, y) {
+  hooks.foodDrops += 1;
+  hooks.lastFood = { x, y };
+  if (!state.koi) return;
+  try {
+    state.koi.dropFood(x + 0.5, y + 0.5);
+  } catch (error) {
+    koiFailed(error);
+  }
+}
+
 let lastTime = null;
 function tick(now) {
   requestAnimationFrame(tick);
@@ -489,6 +523,7 @@ function canvasSample() {
 
 sizeCanvases(state.view);
 setupLegend();
+pads.attachInput(canvas, { getState: () => state, onWaterTap, card: pageCardInstance() });
 watchPixelRatio();
 rebuildLayers();
 requestAnimationFrame(tick);

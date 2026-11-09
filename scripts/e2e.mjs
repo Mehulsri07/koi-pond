@@ -5,7 +5,7 @@
 // Run scripts/build.sh first so web/pkg exists (the script stops at once if it does not).
 // It serves web/ itself on a free port, loads the page with ?fixture
 // (web/fixtures/snapshot.json), runs every check at each size it names, saves desktop and
-// phone screenshots (plus a 4× floor detail crop), and exits non-zero on any failure. --only runs just the checks whose
+// phone screenshots (plus one with a pad's card open and a 4× floor detail crop), and exits non-zero on any failure. --only runs just the checks whose
 // name contains the text. Screenshots go to --screenshots <dir>, else $E2E_SCREENSHOTS,
 // else <os tmpdir>/koi-pond-e2e; the script prints where.
 //
@@ -33,8 +33,10 @@ function argument(name) {
 }
 const SCREENSHOT_DIR = resolve(argument('--screenshots') ?? process.env.E2E_SCREENSHOTS ?? join(tmpdir(), 'koi-pond-e2e'));
 const SCREENSHOTS = {
-  desktop: join(SCREENSHOT_DIR, 'site-floor-desktop.png'),
-  phone: join(SCREENSHOT_DIR, 'site-floor-phone.png'),
+  desktop: join(SCREENSHOT_DIR, 'site-pads-desktop.png'),
+  phone: join(SCREENSHOT_DIR, 'site-pads-phone.png'),
+  // The desktop pond with a pad's hover card open.
+  card: join(SCREENSHOT_DIR, 'site-pads-card.png'),
   // A 160×100 pond-pixel crop around a rock and a plant clump, at 4× so pixels can be judged.
   detail: join(SCREENSHOT_DIR, 'site-floor-detail.png'),
 };
@@ -641,6 +643,273 @@ check('the page edge takes the floor edge color', ['desktop'], async ({ page, op
   assert.notEqual(colors.pond, 'rgb(111, 179, 184)', 'the floor, not the placeholder water');
 });
 
+
+// The lilypads (web/src/pads.js, web/src/card.js).
+
+// Once the pad layer is built for the koi's pads: the pads, the pond view and, per pad, a
+// point to aim at. `inside` is the pad pixel nearest its center (in pond pixels) that is
+// below the header; `notchPoint` is a water pixel inside the pad's disc along the notch's
+// compass direction (null if none); `opposite` counts water pixels along the far side's
+// ray, which must be all pad.
+async function padTargets(page) {
+  await page.waitForFunction(() => window.__pond.padBuilds > 0 && window.__pond.padMask()?.pads === window.__pond.state.pads, null, { timeout: 5000 });
+  return page.evaluate(() => {
+    const { width, height, mask } = window.__pond.padMask();
+    const { view, pads, headerHeight } = window.__pond.state;
+    const top = Math.ceil(headerHeight / view.scale) + 2;
+    const at = (x, y) => (x >= 0 && y >= 0 && x < width && y < height ? mask[y * width + x] : -1);
+    // Open water near the bottom-left corner, for taps that miss every pad.
+    let water = null;
+    for (let y = height - 4; y > height / 2 && !water; y -= 1) {
+      for (let x = 4; x < width / 2 && !water; x += 1) if (at(x, y) === 0) water = { x, y };
+    }
+    return {
+      view,
+      water,
+      pads: pads.map((pad, index) => {
+        const radius = pad.diameter / 2;
+        let inside = null;
+        for (let ring = 0; ring <= radius && !inside; ring += 1) {
+          for (let dy = -ring; dy <= ring && !inside; dy += 1) {
+            for (let dx = -ring; dx <= ring && !inside; dx += 1) {
+              const x = Math.round(pad.x) + dx;
+              const y = Math.round(pad.y) + dy;
+              if (y >= top && at(x, y) === index + 1) inside = { x, y };
+            }
+          }
+        }
+        // Screen angles, y down: 0 is east, π/2 is south. The sprite serves the nearest
+        // of the eight compass directions.
+        const step = Math.round(pad.notch / (Math.PI / 4));
+        const angle = step * (Math.PI / 4);
+        let notchPoint = null;
+        let opposite = 0;
+        for (let t = radius * 0.3; t <= radius - 1.5; t += 0.5) {
+          const x = Math.round(pad.x + t * Math.cos(angle));
+          const y = Math.round(pad.y + t * Math.sin(angle));
+          if (!notchPoint && at(x, y) === 0) notchPoint = { x, y };
+          if (at(Math.round(pad.x - t * Math.cos(angle)), Math.round(pad.y - t * Math.sin(angle))) === 0) opposite += 1;
+        }
+        return { ...pad, index, inside, notchPoint, opposite };
+      }),
+    };
+  });
+}
+
+// The client point at the middle of a pond pixel.
+// Touch points may land on whole CSS pixels, so aim a little left and up of the middle.
+const clientPoint = (view, { x, y }) => ({ x: (x + 0.4) * view.scale, y: (y + 0.4) * view.scale });
+
+// Pads with a pad pixel below the header to aim at.
+const reachable = (targets) => targets.pads.filter((pad) => pad.inside);
+
+check('pads match the data', BOTH, async ({ page, errors, open }) => {
+  assert.equal(await open(), null);
+  const targets = await padTargets(page);
+  const result = await page.evaluate(() => {
+    const { width, height, mask, canvas } = window.__pond.padMask();
+    // 4-connected components of opaque pad pixels (ripples, buds and water excluded).
+    const seen = new Uint8Array(width * height);
+    const components = [];
+    const stack = [];
+    for (let start = 0; start < mask.length; start += 1) {
+      if (!mask[start] || seen[start]) continue;
+      const id = mask[start];
+      let size = 0;
+      let mixed = false;
+      seen[start] = 1;
+      stack.push(start);
+      while (stack.length) {
+        const pixel = stack.pop();
+        size += 1;
+        if (mask[pixel] !== id) mixed = true;
+        const x = pixel % width;
+        for (const next of [pixel - width, pixel + width, x > 0 ? pixel - 1 : -1, x < width - 1 ? pixel + 1 : -1]) {
+          if (next >= 0 && next < mask.length && mask[next] && !seen[next]) {
+            seen[next] = 1;
+            stack.push(next);
+          }
+        }
+      }
+      if (size > 4) components.push({ id, size, mixed });
+    }
+    // Every mask pixel is opaque in the layer.
+    const data = canvas.getContext('2d').getImageData(0, 0, width, height).data;
+    let clear = 0;
+    for (let index = 0; index < mask.length; index += 1) if (mask[index] && data[index * 4 + 3] !== 255) clear += 1;
+    return {
+      components, clear, padCount: window.__pond.padCount, builds: window.__pond.padBuilds,
+      size: [width, height], view: [window.__pond.view.pondWidth, window.__pond.view.pondHeight],
+    };
+  });
+  assert.equal(result.padCount, 7, 'the fixture has 7 owned repos');
+  assert.equal(result.components.length, result.padCount, `components ${JSON.stringify(result.components)}`);
+  assert.deepEqual(result.components.map(({ id }) => id).sort((a, b) => a - b), targets.pads.map((pad) => pad.index + 1));
+  assert.ok(result.components.every(({ mixed }) => !mixed), 'each pad is one id');
+  assert.equal(result.clear, 0, 'every hit pixel is drawn');
+  assert.deepEqual(result.size, result.view, 'the mask is pond-sized');
+  assert.equal(result.builds, 1, 'the pad layer is built once');
+  // The bigger the pad, the more of it there is.
+  for (const pad of targets.pads) {
+    const component = result.components.find(({ id }) => id === pad.index + 1);
+    const disc = Math.PI * (pad.diameter / 2) ** 2;
+    assert.ok(component.size > 0.6 * disc && component.size < 1.1 * disc, `${pad.repo}: ${component.size} px for a ${pad.diameter} px pad`);
+  }
+  // The layer is drawn above the koi: a pad pixel on screen is the layer's pixel.
+  await page.waitForTimeout(200);
+  const onScreen = await page.evaluate((point) => {
+    const { canvas } = window.__pond.padMask();
+    const layer = canvas.getContext('2d').getImageData(point.x, point.y, 1, 1).data;
+    const pond = document.getElementById('pond');
+    const ratio = pond.width / window.__pond.view.pondWidth;
+    const shown = pond.getContext('2d').getImageData(Math.floor((point.x + 0.5) * ratio), Math.floor((point.y + 0.5) * ratio), 1, 1).data;
+    return { layer: [...layer], shown: [...shown] };
+  }, reachable(targets)[0].inside);
+  assert.deepEqual(onScreen.shown, onScreen.layer);
+  assert.deepEqual(errors, []);
+});
+
+check('the notch is water', BOTH, async ({ page, errors, size, open }) => {
+  assert.equal(await open(), null);
+  const targets = await padTargets(page);
+  for (const pad of targets.pads) {
+    assert.ok(pad.notchPoint, `${pad.repo} (${pad.diameter} px, notch ${pad.notch.toFixed(2)}): water along the notch`);
+    assert.equal(pad.opposite, 0, `${pad.repo}: the side opposite the notch is all pad`);
+  }
+  // A tap in the biggest pad's notch drops food there.
+  const top = Math.ceil((await page.evaluate(() => window.__pond.state.headerHeight)) / targets.view.scale) + 2;
+  const pad = targets.pads.filter((each) => each.notchPoint.y >= top).sort((a, b) => b.diameter - a.diameter)[0];
+  const point = clientPoint(targets.view, pad.notchPoint);
+  const before = await page.evaluate(() => window.__pond.foodDrops);
+  if (size === 'phone') await page.touchscreen.tap(point.x, point.y);
+  else await page.mouse.click(point.x, point.y);
+  await page.waitForFunction((count) => window.__pond.foodDrops > count, before, { timeout: 2000 });
+  assert.deepEqual(await page.evaluate(() => window.__pond.lastFood), pad.notchPoint);
+  assert.deepEqual(errors, []);
+});
+
+check('hovering a pad names its repo', ['desktop'], async ({ page, errors, open }) => {
+  assert.equal(await open(), null);
+  const targets = await padTargets(page);
+  const card = page.locator('#pad-card');
+  for (const pad of reachable(targets)) {
+    const point = clientPoint(targets.view, pad.inside);
+    await page.mouse.move(point.x, point.y);
+    await card.waitFor({ state: 'visible', timeout: 2000 });
+    const text = await card.innerText();
+    assert.ok(text.includes(pad.repo.split('/')[1]), `card names ${pad.repo}: ${text}`);
+    assert.match(text, new RegExp(`${pad.commits} commits? by Mehul`));
+    if (pad.language) assert.ok(text.includes(pad.language), `card names ${pad.language}`);
+    const link = card.getByRole('link', { name: 'Open repo' });
+    assert.equal(await link.getAttribute('href'), pad.url);
+    assert.equal(await link.getAttribute('target'), '_blank');
+    assert.match(await link.getAttribute('rel'), /noopener/);
+    // Inside the viewport.
+    const box = await card.boundingBox();
+    const viewport = page.viewportSize();
+    assert.ok(box.x >= 0 && box.y >= 0 && box.x + box.width <= viewport.width && box.y + box.height <= viewport.height, `card box ${JSON.stringify(box)}`);
+    const dot = await card.locator('.pad-card-dot').evaluate((element) => getComputedStyle(element).backgroundColor);
+    if (pad.languageColor) {
+      const hex = pad.languageColor.slice(1).match(/../g).map((part) => parseInt(part, 16));
+      assert.equal(dot, `rgb(${hex.join(', ')})`);
+    }
+  }
+  // Water hides it, and a hover never drops food.
+  const point = clientPoint(targets.view, targets.water);
+  await page.mouse.move(point.x, point.y);
+  await card.waitFor({ state: 'hidden', timeout: 2000 });
+  assert.equal(await page.evaluate(() => window.__pond.foodDrops), 0);
+  assert.deepEqual(errors, []);
+});
+
+check('clicking a pad opens the repo', ['desktop'], async ({ page, errors, open }) => {
+  assert.equal(await open(), null);
+  await page.context().route('https://github.com/**', (route) => route.fulfill({ status: 200, contentType: 'text/html', body: 'repo' }));
+  const targets = await padTargets(page);
+  const pad = reachable(targets)[0];
+  const point = clientPoint(targets.view, pad.inside);
+  const popup = page.context().waitForEvent('page', { timeout: 5000 });
+  await page.mouse.click(point.x, point.y);
+  const opened = await popup;
+  await opened.waitForLoadState();
+  assert.equal(opened.url(), pad.url);
+  assert.equal(await page.evaluate(() => window.__pond.foodDrops), 0, 'a click on a pad drops no food');
+  // A click on water feeds instead, and opens nothing.
+  let extra = 0;
+  page.context().on('page', () => { extra += 1; });
+  const water = clientPoint(targets.view, targets.water);
+  await page.mouse.click(water.x, water.y);
+  await page.waitForFunction(() => window.__pond.foodDrops === 1, null, { timeout: 2000 });
+  await page.waitForTimeout(200);
+  assert.equal(extra, 0);
+  assert.deepEqual(errors, []);
+});
+
+check('tapping a pad drops no food', ['phone'], async ({ page, errors, open }) => {
+  assert.equal(await open(), null);
+  const targets = await padTargets(page);
+  const card = page.locator('#pad-card');
+  let popups = 0;
+  page.context().on('page', () => { popups += 1; });
+  const pad = reachable(targets)[0];
+  const point = clientPoint(targets.view, pad.inside);
+  await page.touchscreen.tap(point.x, point.y);
+  await card.waitFor({ state: 'visible', timeout: 2000 });
+  assert.ok((await card.innerText()).includes(pad.repo.split('/')[1]));
+  await page.waitForTimeout(300);
+  assert.equal(await page.evaluate(() => window.__pond.foodDrops), 0, 'a tap on a pad drops no food');
+  assert.equal(popups, 0, 'the first tap only shows the card');
+  // A tap elsewhere hides the card (and, on water, feeds).
+  const water = clientPoint(targets.view, targets.water);
+  await page.touchscreen.tap(water.x, water.y);
+  await card.waitFor({ state: 'hidden', timeout: 2000 });
+  assert.equal(await page.evaluate(() => window.__pond.foodDrops), 1);
+  assert.deepEqual(errors, []);
+});
+
+check('a pad without a link shows its name as text', ['desktop'], async ({ page, errors, open }) => {
+  const fixture = JSON.parse(await readFile(join(WEB_ROOT, 'fixtures', 'snapshot.json'), 'utf8'));
+  // Not a plain owner/name, so pads_json gives it no url.
+  fixture.owned_repositories[0].name_with_owner = 'Mehulsri07/<img src=x onerror=window.__xss=1>';
+  await page.route('**/fixtures/snapshot.json', (route) =>
+    route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(fixture) }),
+  );
+  assert.equal(await open(), null);
+  const targets = await padTargets(page);
+  const pad = targets.pads.find((each) => each.url === null);
+  assert.ok(pad && pad.inside, 'the unlinked pad is on screen');
+  const point = clientPoint(targets.view, pad.inside);
+  let popups = 0;
+  page.context().on('page', () => { popups += 1; });
+  await page.mouse.move(point.x, point.y);
+  const card = page.locator('#pad-card');
+  await card.waitFor({ state: 'visible', timeout: 2000 });
+  assert.match(await card.innerText(), /<img src=x/);
+  assert.equal(await card.locator('a').count(), 0, 'no link');
+  assert.equal(await card.locator('img').count(), 0);
+  await page.mouse.click(point.x, point.y);
+  await page.waitForTimeout(300);
+  assert.equal(popups, 0, 'not clickable');
+  assert.equal(await page.evaluate(() => window.__pond.foodDrops), 0, 'and no food');
+  assert.equal(await page.evaluate(() => window.__xss), undefined);
+  assert.deepEqual(errors, []);
+});
+
+check('the pads cost one blit a frame', ['desktop'], async ({ page, open }) => {
+  assert.equal(await open(), null);
+  await padTargets(page);
+  const cost = await page.evaluate(() => window.__pond.layerCost(['pads'], { runs: 5, count: 60 }));
+  const added = cost.layers - cost.calibration;
+  console.log(`      pads: ${cost.layers.toFixed(3)} ms a frame, one plain blit ${cost.calibration.toFixed(3)} ms, added ${added.toFixed(3)} ms`);
+  assert.ok(added < 0.5, `the pad layer adds ${added.toFixed(3)} ms a frame beyond one blit`);
+  const builds = await page.evaluate(() => window.__pond.padBuilds);
+  // A resize that changes the pond's size rebuilds the layer once.
+  await resizeAndSettle(page, { width: 1200, height: 760 });
+  await page.waitForFunction((count) => window.__pond.padBuilds === count + 1, builds, { timeout: 5000 });
+  await page.waitForTimeout(300);
+  assert.equal(await page.evaluate(() => window.__pond.padBuilds), builds + 1, 'one rebuild for one new pond size');
+});
+
 // ---------------------------------------------------------------------------------------
 
 const only = argument('--only');
@@ -689,9 +958,20 @@ if (!only) {
     const session = await newPage(size);
     try {
       assert.equal(await session.open(), null);
+      await padTargets(session.page);
       await session.page.waitForTimeout(1500);
       await session.page.screenshot({ path: SCREENSHOTS[size] });
       console.log(`screenshot: ${SCREENSHOTS[size]}`);
+      if (size === 'desktop') {
+        // The biggest pad's card, opened by hovering it.
+        const targets = await padTargets(session.page);
+        const pad = reachable(targets).sort((a, b) => b.diameter - a.diameter)[0];
+        const point = clientPoint(targets.view, pad.inside);
+        await session.page.mouse.move(point.x, point.y);
+        await session.page.locator('#pad-card').waitFor({ state: 'visible', timeout: 2000 });
+        await session.page.screenshot({ path: SCREENSHOTS.card });
+        console.log(`screenshot: ${SCREENSHOTS.card}`);
+      }
     } catch (error) {
       failed += 1;
       console.log(`FAIL  screenshot [${size}]\n      ${error.message ?? error}`);

@@ -183,7 +183,7 @@ html, body {
   .legend, .legend.open { transition: none; }
 }
 
-/* Pad card: filled and placed by web/src/card.js (Task 7). */
+/* Pad card: filled and placed by web/src/card.js. */
 .pad-card {
   position: fixed;
   z-index: 1;
@@ -192,9 +192,33 @@ html, body {
   max-width: min(260px, calc(100vw - 16px));
   padding: 8px 10px;
   border-radius: 6px;
-  background: var(--strip);
+  background: rgba(9, 24, 27, 0.82);
   color: var(--ink);
+  box-shadow: 0 2px 10px rgba(9, 24, 27, 0.3);
   pointer-events: auto;
+}
+
+.pad-card p { margin: 0; }
+.pad-card-name {
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+.pad-card-language,
+.pad-card-commits { color: var(--ink-dim); }
+.pad-card-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  margin-right: 6px;
+  border-radius: 50%;
+  vertical-align: 0;
+}
+.pad-card-link {
+  display: inline-block;
+  margin-top: 4px;
+  padding: 4px 0;
+  color: var(--focus);
+  text-decoration: underline;
 }
 
 .pad-card[hidden] { display: none; }
