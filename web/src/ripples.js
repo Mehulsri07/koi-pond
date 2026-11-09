@@ -11,6 +11,10 @@
 // radius, no antialiasing). It expands at 24 px/s and fades to nothing over 1 s. With
 // reduced motion a ring does not move: one static ring of RING_STATIC_RADIUS px for
 // 0.4 s. At most MAX_RIPPLES rings live at once; the oldest goes first.
+//
+// At state.spriteScale s (2 on laptop ponds, where the pads are drawn twice as big) the
+// rings stay 1 px wide but spread s times as fast and as far: 48 px/s to a 48 px radius
+// at 1 s, and a 16 px static ring under reduced motion.
 
 export const name = 'ripples';
 
@@ -84,7 +88,8 @@ export function draw(ctx, state, now) {
   for (const ring of rings) {
     const age = Math.max(0, now - ring.born);
     ctx.globalAlpha = reduced ? 1 : Math.max(0, 1 - age / life);
-    const radius = reduced ? STATIC_RADIUS : Math.round((age / 1000) * SPEED);
+    const s = state.spriteScale ?? 1;
+    const radius = reduced ? STATIC_RADIUS * s : Math.round((age / 1000) * SPEED * s);
     ctx.beginPath();
     ringPath(ctx, ring.x, ring.y, radius);
     ctx.fill();

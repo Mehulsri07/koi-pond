@@ -4,6 +4,8 @@
 // wasm food position and clears it the frame the koi gulps. One pellet at a time: a new
 // tap moves it. The approved `food` sprite (web/art/food.png, 3×3) is drawn with its
 // anchor on the pixel, over a 1 px shadow down and to the right in a dark water color.
+// At state.spriteScale s (2 on laptop ponds) the pellet and its shadow are drawn s times
+// bigger, nearest-neighbor, with the anchor still on the pixel and the shadow s px off.
 //
 // Test hook: drawn() says whether the last draw put a pellet on the pond.
 
@@ -67,9 +69,15 @@ export function draw(ctx, state) {
   wasDrawn = false;
   if (failure) throw failure;
   if (!state.food || !sprite) return;
-  const x = Math.floor(state.food.x) - sprite.anchor[0];
-  const y = Math.floor(state.food.y) - sprite.anchor[1];
-  ctx.drawImage(sprite.shadow, x + 1, y + 1);
-  ctx.drawImage(sprite.image, x, y);
+  const s = state.spriteScale ?? 1;
+  const width = sprite.image.width * s;
+  const height = sprite.image.height * s;
+  const x = Math.floor(state.food.x) - sprite.anchor[0] * s;
+  const y = Math.floor(state.food.y) - sprite.anchor[1] * s;
+  const smoothing = ctx.imageSmoothingEnabled;
+  ctx.imageSmoothingEnabled = false;
+  ctx.drawImage(sprite.shadow, x + s, y + s, width, height);
+  ctx.drawImage(sprite.image, x, y, width, height);
+  ctx.imageSmoothingEnabled = smoothing;
   wasDrawn = true;
 }

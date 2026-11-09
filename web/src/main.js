@@ -12,6 +12,11 @@
 // them bottom to top. ctx draws in pond pixels on a pondWidth × pondHeight canvas that
 // is scaled up to the screen once per frame without smoothing. `state` holds:
 //   view        computeView() for the current viewport (web/src/view.js)
+//   spriteScale view.spriteScale: the whole number pads, flowers, buds, droplets, food,
+//               fireflies and the moon are drawn at (nearest-neighbor, on whole pond
+//               pixels); 2 on laptop-size ponds, else 1. Ripples spread that much farther.
+//               The koi's pads are laid out for it (PondKoi::new's sprite_scale), so a
+//               change rebuilds the koi and the layers like a new pond size.
 //   koi         the koi (web/src/koi.js), or null before boot or after a failure
 //   pads        pads_json(), parsed ([] until the koi exists)
 //   legend      legend_json(), parsed (null until the koi exists)
@@ -86,7 +91,7 @@
 //   rippleCounts()     {drop, gulp, pad}: rings added since load
 //   foodDrops          taps on water since load (onWaterTap calls)
 //   lastFood           {x, y}: where the last one landed, in pond pixels, or null
-//   phase              the light this frame: {grade, lift, night} (web/src/lighting.js)
+//   phase              the light this frame: {name, grade, lift, night} (web/src/lighting.js)
 //   fireflies          fireflies drawn last frame (10 at night, 0 by day)
 //   fireflySpots()     [{x, y, frame}]: each firefly's pond pixel and sprite (0 glow, 1 dim)
 //   layerMs            per named layer, a running average of its draw time in the frame
@@ -130,6 +135,7 @@ const header = document.querySelector('.site-header');
 const reducedMotionQuery = matchMedia('(prefers-reduced-motion: reduce)');
 const state = {
   view: computeView(innerWidth, innerHeight, devicePixelRatio),
+  spriteScale: 1,
   koi: null,
   pads: [],
   food: null,
@@ -144,6 +150,7 @@ const state = {
   gulped: false,
   phase: lighting.phaseAt(new Date()),
 };
+state.spriteScale = state.view.spriteScale;
 reducedMotionQuery.addEventListener('change', (event) => {
   state.reducedMotion = event.matches;
 });
@@ -295,8 +302,10 @@ function rebuildLayers() {
 
 function applyView() {
   const next = computeView(innerWidth, innerHeight, devicePixelRatio);
-  const pondChanged = next.pondWidth !== state.view.pondWidth || next.pondHeight !== state.view.pondHeight;
+  const pondChanged =
+    next.pondWidth !== state.view.pondWidth || next.pondHeight !== state.view.pondHeight || next.spriteScale !== state.view.spriteScale;
   state.view = next;
+  state.spriteScale = next.spriteScale;
   sizeCanvases(next);
   hooks.settles += 1;
   const koiMissing = koiHandle !== null && state.koi === null;

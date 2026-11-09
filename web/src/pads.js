@@ -3,7 +3,7 @@
 //
 //   loadSprites() -> Promise<sprites>   web/art/sprites.json and the PNGs this layer uses,
 //                                       as {name: {width, height, anchor, data}}
-//   buildPadLayer(pads, sprites, pondWidth, pondHeight) -> {canvas, hitMask}
+//   buildPadLayer(pads, sprites, pondWidth, pondHeight, spriteScale = 1) -> {canvas, hitMask}
 //   draw(ctx, state) / rebuild(state)   the layer contract (web/src/main.js)
 //   current()      {canvas, hitMask, pads, width, height} for the last build, or null
 //   buildCount()   pad layers built since load
@@ -36,6 +36,16 @@
 //      farthest from the notch (art/bud.txt).
 // hitMask holds, per pond pixel, the pad index + 1 under it, from the leaf, flower and
 // droplet pixels only: a tap in the notch, on a ripple or on a bud is a tap on water.
+//
+// Sprite scale (state.spriteScale, web/src/view.js): at s = 2 the koi's pads come laid
+// out for it (x, y and diameter are twice a layout made for the half-size pond). The
+// layer is then laid exactly as above for the pads at 1/s (x / s, y / s, diameter / s, so
+// the sprite is picked by the unscaled diameter) on a pond ceil(width / s) by
+// ceil(height / s), and that bitmap and its hit mask are scaled up s times,
+// nearest-neighbor, to the pond's size. Every sprite pixel becomes an s × s block on
+// whole pond pixels; flower offsets, droplet and bud placement scale with it, and the
+// hit mask is the scaled opaque pixels. It is still one pond-size bitmap, blitted once a
+// frame.
 //
 // Input (attachInput):
 //   - A mouse (or pen) moving over a pad shows its card; over water it hides it. A
@@ -131,10 +141,49 @@ function hashString(text) {
   return hash >>> 0;
 }
 
-export function buildPadLayer(pads, sprites, pondWidth, pondHeight) {
+export function buildPadLayer(pads, sprites, pondWidth, pondHeight, spriteScale = 1) {
   const canvas = document.createElement('canvas');
   canvas.width = pondWidth;
   canvas.height = pondHeight;
+  const s = Math.max(1, Math.floor(spriteScale));
+  const { image, hitMask } =
+    s === 1
+      ? layPads(pads, sprites, pondWidth, pondHeight)
+      : scaleUp(
+          layPads(
+            pads.map((pad) => ({ ...pad, x: pad.x / s, y: pad.y / s, diameter: pad.diameter / s })),
+            sprites,
+            Math.ceil(pondWidth / s),
+            Math.ceil(pondHeight / s),
+          ),
+          pondWidth,
+          pondHeight,
+          s,
+        );
+  canvas.getContext('2d').putImageData(image, 0, 0);
+  return { canvas, hitMask };
+}
+
+// A laid layer `s` times bigger, nearest-neighbor, cut to width × height.
+function scaleUp({ image: small, hitMask: smallMask }, width, height, s) {
+  const image = new ImageData(width, height);
+  const hitMask = new Uint16Array(width * height);
+  const from = new Uint32Array(small.data.buffer);
+  const to = new Uint32Array(image.data.buffer);
+  for (let y = 0; y < height; y += 1) {
+    const source = Math.floor(y / s) * small.width;
+    const target = y * width;
+    for (let x = 0; x < width; x += 1) {
+      const at = source + Math.floor(x / s);
+      to[target + x] = from[at];
+      hitMask[target + x] = smallMask[at];
+    }
+  }
+  return { image, hitMask };
+}
+
+// The layer at native sprite size: its ImageData and hit mask.
+function layPads(pads, sprites, pondWidth, pondHeight) {
   const hitMask = new Uint16Array(pondWidth * pondHeight);
   const image = new ImageData(pondWidth, pondHeight);
   const out = image.data;
@@ -275,9 +324,7 @@ export function buildPadLayer(pads, sprites, pondWidth, pondHeight) {
     blit(sprites.bud, footX, footY);
   }
 
-  const context = canvas.getContext('2d');
-  context.putImageData(image, 0, 0);
-  return { canvas, hitMask };
+  return { image, hitMask };
 }
 
 // ---------------------------------------------------------------------------------------
@@ -299,19 +346,20 @@ export function buildCount() {
   return builds;
 }
 
-function layoutKey(pads, width, height) {
-  return `${width}x${height}:${JSON.stringify(pads)}`;
+function layoutKey(pads, width, height, spriteScale) {
+  return `${width}x${height}@${spriteScale}:${JSON.stringify(pads)}`;
 }
 
 function build(state) {
   const { pondWidth, pondHeight } = state.view;
+  const spriteScale = state.spriteScale ?? 1;
   const pads = state.pads ?? [];
-  const key = layoutKey(pads, pondWidth, pondHeight);
+  const key = layoutKey(pads, pondWidth, pondHeight, spriteScale);
   if (built && built.key === key) {
     built.pads = pads;
     return;
   }
-  const layer = buildPadLayer(pads, sprites, pondWidth, pondHeight);
+  const layer = buildPadLayer(pads, sprites, pondWidth, pondHeight, spriteScale);
   builds += 1;
   built = { ...layer, pads, key, width: pondWidth, height: pondHeight };
 }

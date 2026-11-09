@@ -64,6 +64,10 @@ const SIZES = {
   desktop: { viewport: { width: 1280, height: 800 }, deviceScaleFactor: 2 },
   phone: { viewport: { width: 400, height: 800 }, deviceScaleFactor: 2, isMobile: true, hasTouch: true },
   fractional: { viewport: { width: 1280, height: 800 }, deviceScaleFactor: 1.5 },
+  // A large desktop: the whole pond is doubled, so sprites are drawn at 1.
+  wide: { viewport: { width: 1920, height: 1080 }, deviceScaleFactor: 1 },
+  // A touch laptop: a laptop pond (sprites at 2) tapped with a finger.
+  touchLaptop: { viewport: { width: 1280, height: 800 }, deviceScaleFactor: 2, hasTouch: true },
 };
 const BOTH = ['desktop', 'phone'];
 
@@ -139,11 +143,18 @@ async function resizeAndSettle(page, viewport) {
 check('the view is computed from the viewport', [], async () => {
   const { computeView } = await import(pathToFileURL(join(WEB_ROOT, 'src', 'view.js')).href);
   assert.deepEqual(computeView(1280, 800, 1), {
-    scale: 1, pondWidth: 1280, pondHeight: 800, cssWidth: 1280, cssHeight: 800, backingWidth: 1280, backingHeight: 800,
+    scale: 1, spriteScale: 2, pondWidth: 1280, pondHeight: 800, cssWidth: 1280, cssHeight: 800, backingWidth: 1280, backingHeight: 800,
   });
   assert.deepEqual(computeView(1921, 1081, 2), {
-    scale: 2, pondWidth: 960, pondHeight: 540, cssWidth: 1920, cssHeight: 1080, backingWidth: 3840, backingHeight: 2160,
+    scale: 2, spriteScale: 1, pondWidth: 960, pondHeight: 540, cssWidth: 1920, cssHeight: 1080, backingWidth: 3840, backingHeight: 2160,
   });
+  // Sprites are drawn at 2 on laptop ponds only: view scale 1 and a pond at least 960 wide.
+  assert.equal(computeView(960, 600, 1).spriteScale, 2);
+  assert.equal(computeView(959, 600, 1).spriteScale, 1);
+  assert.equal(computeView(400, 800, 3).spriteScale, 1);
+  assert.equal(computeView(1599, 900, 1).spriteScale, 2);
+  assert.equal(computeView(1600, 900, 1).spriteScale, 1);
+  assert.equal(computeView(2560, 800, 1).spriteScale, 2, 'too short for view scale 2, so a laptop pond');
   assert.equal(computeView(1600, 900, 1).scale, 2);
   assert.equal(computeView(1599, 900, 1).scale, 1);
   assert.equal(computeView(1600, 899, 1).scale, 1);
@@ -670,7 +681,7 @@ async function padTargets(page) {
   await page.waitForFunction(() => window.__pond.padBuilds > 0 && window.__pond.padMask()?.pads === window.__pond.state.pads, null, { timeout: 5000 });
   return page.evaluate(() => {
     const { width, height, mask } = window.__pond.padMask();
-    const { view, pads, headerHeight } = window.__pond.state;
+    const { view, pads, headerHeight, spriteScale } = window.__pond.state;
     const top = Math.ceil(headerHeight / view.scale) + 2;
     const at = (x, y) => (x >= 0 && y >= 0 && x < width && y < height ? mask[y * width + x] : -1);
     // Open water near the bottom-left corner, for taps that miss every pad.
@@ -699,7 +710,8 @@ async function padTargets(page) {
         const angle = step * (Math.PI / 4);
         let notchPoint = null;
         let opposite = 0;
-        for (let t = radius * 0.3; t <= radius - 1.5; t += 0.5) {
+        // The rim tolerance is in sprite pixels, so it scales with the sprites.
+        for (let t = radius * 0.3; t <= radius - 1.5 * spriteScale; t += 0.5) {
           const x = Math.round(pad.x + t * Math.cos(angle));
           const y = Math.round(pad.y + t * Math.sin(angle));
           if (!notchPoint && at(x, y) === 0) notchPoint = { x, y };
@@ -803,7 +815,7 @@ check('the notch is water', BOTH, async ({ page, errors, size, open }) => {
   assert.deepEqual(errors, []);
 });
 
-check('hovering a pad names its repo', ['desktop'], async ({ page, errors, open }) => {
+check('hovering a pad names its repo', BOTH, async ({ page, errors, open }) => {
   assert.equal(await open(), null);
   const targets = await padTargets(page);
   const card = page.locator('#pad-card');
@@ -839,7 +851,7 @@ check('hovering a pad names its repo', ['desktop'], async ({ page, errors, open 
   assert.deepEqual(errors, []);
 });
 
-check('clicking a pad opens the repo', ['desktop'], async ({ page, errors, open }) => {
+check('clicking a pad opens the repo', BOTH, async ({ page, errors, open }) => {
   assert.equal(await open(), null);
   await page.context().route('https://github.com/**', (route) => route.fulfill({ status: 200, contentType: 'text/html', body: 'repo' }));
   const targets = await padTargets(page);
@@ -862,7 +874,7 @@ check('clicking a pad opens the repo', ['desktop'], async ({ page, errors, open 
   assert.deepEqual(errors, []);
 });
 
-check('tapping a pad drops no food', ['phone'], async ({ page, errors, open }) => {
+check('tapping a pad drops no food', ['phone', 'touchLaptop'], async ({ page, errors, open }) => {
   assert.equal(await open(), null);
   const targets = await padTargets(page);
   const card = page.locator('#pad-card');
@@ -914,19 +926,123 @@ check('a pad without a link shows its name as text', ['desktop'], async ({ page,
   assert.deepEqual(errors, []);
 });
 
-check('the pads cost one blit a frame', ['desktop'], async ({ page, open }) => {
+check('the pads cost one blit a frame', BOTH, async ({ page, open }) => {
   assert.equal(await open(), null);
   await padTargets(page);
   const cost = await page.evaluate(() => window.__pond.layerCost(['pads'], { runs: 5, count: 60 }));
   const added = cost.layers - cost.calibration;
-  console.log(`      pads: ${cost.layers.toFixed(3)} ms a frame, one plain blit ${cost.calibration.toFixed(3)} ms, added ${added.toFixed(3)} ms`);
+  const spriteScale = await page.evaluate(() => window.__pond.state.spriteScale);
+  console.log(`      pads at sprite scale ${spriteScale}: ${cost.layers.toFixed(3)} ms a frame, one plain blit ${cost.calibration.toFixed(3)} ms, added ${added.toFixed(3)} ms`);
   assert.ok(added < 0.5, `the pad layer adds ${added.toFixed(3)} ms a frame beyond one blit`);
   const builds = await page.evaluate(() => window.__pond.padBuilds);
-  // A resize that changes the pond's size rebuilds the layer once.
-  await resizeAndSettle(page, { width: 1200, height: 760 });
+  // A resize that changes the pond's size (and not its sprite scale) rebuilds the layer once.
+  const { width, height } = page.viewportSize();
+  await resizeAndSettle(page, { width: width - 80, height: height - 40 });
   await page.waitForFunction((count) => window.__pond.padBuilds === count + 1, builds, { timeout: 5000 });
   await page.waitForTimeout(300);
   assert.equal(await page.evaluate(() => window.__pond.padBuilds), builds + 1, 'one rebuild for one new pond size');
+});
+
+// The biggest pad's leaf, measured two ways: its opaque width in the pad layer (the hit
+// mask's columns for that pad), and the opaque, non-ripple width of the unscaled sprite
+// pads.js picks for it (by diameter / spriteScale and its notch).
+async function biggestPadWidths(page) {
+  await padTargets(page);
+  return page.evaluate(async () => {
+    const { width, height, mask, pads } = window.__pond.padMask();
+    const spriteScale = window.__pond.state.spriteScale;
+    const index = pads.reduce((best, pad, at) => (pad.diameter > pads[best].diameter ? at : best), 0);
+    let left = Infinity;
+    let right = -Infinity;
+    for (let y = 0; y < height; y += 1) {
+      for (let x = 0; x < width; x += 1) {
+        if (mask[y * width + x] === index + 1) {
+          left = Math.min(left, x);
+          right = Math.max(right, x);
+        }
+      }
+    }
+    // The sprite pads.js draws for it, unscaled, and its leaf's width as drawn (a
+    // transposed sprite's width is its height).
+    const layer = window.__pond.layers.find((each) => each.name === 'pads');
+    const { sprite, transposed } = layer.padSprite(await layer.loadSprites(), pads[index].diameter / spriteScale, pads[index].notch);
+    const ripple = new Set(['41,83,83', '86,136,137']);
+    let spriteLeft = Infinity;
+    let spriteRight = -Infinity;
+    for (let y = 0; y < sprite.height; y += 1) {
+      for (let x = 0; x < sprite.width; x += 1) {
+        const at = (y * sprite.width + x) * 4;
+        const { data } = sprite;
+        if (data[at + 3] && !ripple.has(`${data[at]},${data[at + 1]},${data[at + 2]}`)) {
+          const across = transposed ? y : x;
+          spriteLeft = Math.min(spriteLeft, across);
+          spriteRight = Math.max(spriteRight, across);
+        }
+      }
+    }
+    return {
+      spriteScale, viewSpriteScale: window.__pond.view.spriteScale, diameter: pads[index].diameter,
+      layerWidth: right - left + 1, spriteWidth: spriteRight - spriteLeft + 1,
+    };
+  });
+}
+
+check('sprites double on laptop ponds', ['desktop', 'phone', 'wide'], async ({ page, errors, size, open }) => {
+  assert.equal(await open(), null);
+  const seen = await biggestPadWidths(page);
+  console.log(`      ${size}: sprite scale ${seen.spriteScale}, biggest pad ${seen.diameter} px, ${seen.layerWidth} px wide in the layer, sprite ${seen.spriteWidth} px`);
+  const expected = size === 'desktop' ? 2 : 1;
+  assert.equal(seen.spriteScale, expected, 'state.spriteScale');
+  assert.equal(seen.viewSpriteScale, expected, 'view.spriteScale');
+  assert.ok(seen.layerWidth >= expected * seen.spriteWidth - 2, `${seen.layerWidth} px wide for a ${seen.spriteWidth} px sprite at ${expected}x`);
+  assert.ok(seen.layerWidth <= seen.diameter, `no wider than the pad's ${seen.diameter} px (${seen.layerWidth})`);
+  assert.deepEqual(errors, []);
+});
+
+// Whether any two pads overlap or crowd closer than `gap` pond px.
+function crowded(pads, gap) {
+  for (let one = 0; one < pads.length; one += 1) {
+    for (let two = one + 1; two < pads.length; two += 1) {
+      const [a, b] = [pads[one], pads[two]];
+      if (Math.hypot(a.x - b.x, a.y - b.y) < a.diameter / 2 + b.diameter / 2 + gap - 1e-9) return `${a.repo} and ${b.repo}`;
+    }
+  }
+  return null;
+}
+
+check('crossing the laptop threshold rebuilds the pads once', ['desktop'], async ({ page, errors, open }) => {
+  assert.equal(await open(), null);
+  await padTargets(page);
+  const sample = () => page.evaluate(() => ({
+    builds: window.__pond.padBuilds, spriteScale: window.__pond.state.spriteScale, pads: window.__pond.state.pads,
+    view: window.__pond.view, liveKoi: window.__pond.liveKoi,
+  }));
+  const settleTo = async (viewport, spriteScale) => {
+    const before = await sample();
+    await resizeAndSettle(page, viewport);
+    await page.waitForFunction((count) => window.__pond.padBuilds > count, before.builds, { timeout: 5000 });
+    await page.waitForTimeout(300);
+    const after = await sample();
+    assert.equal(after.builds, before.builds + 1, `one pad build crossing to ${viewport.width}×${viewport.height}`);
+    assert.equal(after.spriteScale, spriteScale);
+    assert.equal(after.liveKoi, 1);
+    assert.equal(crowded(after.pads, 2 * spriteScale), null, 'pads keep their gap');
+    for (const pad of after.pads) {
+      const r = pad.diameter / 2;
+      assert.ok(pad.x - r >= 0 && pad.y - r >= 0 && pad.x + r <= after.view.pondWidth && pad.y + r <= after.view.pondHeight, `${pad.repo} inside`);
+    }
+    await padTargets(page);
+    return after;
+  };
+  const start = await sample();
+  assert.equal(start.spriteScale, 2);
+  const below = await settleTo({ width: 900, height: 800 }, 1); // under 960: a small pond
+  const back = await settleTo({ width: 1280, height: 800 }, 2);
+  assert.deepEqual(back.pads, start.pads, 'the same laptop pads again');
+  assert.ok(Math.max(...below.pads.map((pad) => pad.diameter)) <= 48);
+  await settleTo({ width: 1920, height: 1080 }, 1); // view scale 2: the whole pond doubles instead
+  await settleTo({ width: 1280, height: 800 }, 2);
+  assert.deepEqual(errors, []);
 });
 
 
@@ -1091,7 +1207,7 @@ check('tapping a pad ripples the pad and drops no food', ['desktop'], async ({ p
   assert.deepEqual(errors, []);
 });
 
-check('reduced motion shows one static ring', ['desktop'], async ({ page, errors, open }) => {
+check('reduced motion shows one static ring', BOTH, async ({ page, errors, open }) => {
   await page.emulateMedia({ reducedMotion: 'reduce' });
   assert.equal(await open(), null);
   const targets = await padTargets(page);
@@ -1106,14 +1222,16 @@ check('reduced motion shows one static ring', ['desktop'], async ({ page, errors
       return `${r},${g},${b}`;
     }, { x, y });
   const ring = '168,227,230';
+  // 8 px, or 16 on a laptop pond (sprite scale 2), so it reads round the bigger pads.
+  const radius = 8 * (await page.evaluate(() => window.__pond.state.spriteScale));
   await page.waitForFunction(() => window.__pond.frames > 0);
   await page.waitForTimeout(60);
-  assert.equal(await pixel(water.x + 8, water.y), ring, 'a ring at its fixed radius at once');
+  assert.equal(await pixel(water.x + radius, water.y), ring, 'a ring at its fixed radius at once');
   await page.waitForTimeout(150);
-  assert.equal(await pixel(water.x + 8, water.y), ring, 'and still there, not spreading');
-  assert.notEqual(await pixel(water.x + 20, water.y), ring);
+  assert.equal(await pixel(water.x + radius, water.y), ring, 'and still there, not spreading');
+  assert.notEqual(await pixel(water.x + radius + 12, water.y), ring);
   await page.waitForTimeout(500);
-  assert.notEqual(await pixel(water.x + 8, water.y), ring, 'gone after 0.4 s');
+  assert.notEqual(await pixel(water.x + radius, water.y), ring, 'gone after 0.4 s');
   assert.deepEqual(errors, []);
 });
 
@@ -1127,7 +1245,7 @@ check('at most 12 ripples live at once', ['desktop'], async ({ page, errors, ope
   assert.deepEqual(errors, []);
 });
 
-check('a ripple spreads at 24 px a second and fades out in a second', ['desktop'], async ({ page, errors, open }) => {
+check('a ripple spreads at 24 px a second (48 on laptop ponds) and fades out in a second', BOTH, async ({ page, errors, open }) => {
   assert.equal(await open(), null);
   const targets = await padTargets(page);
   const water = await waterNear(page, { x: Math.round(targets.view.pondWidth * 0.62), y: Math.round(targets.view.pondHeight * 0.65) });
@@ -1139,6 +1257,7 @@ check('a ripple spreads at 24 px a second and fades out in a second', ['desktop'
       const { data } = canvas.getContext('2d').getImageData(0, Math.floor((y + 0.5) * k), canvas.width, 1);
       return Array.from({ length: window.__pond.view.pondWidth }, (_, x) => data[Math.floor((x + 0.5) * k) * 4 + 1]);
     }, { y: water.y });
+  const spriteScale = await page.evaluate(() => window.__pond.state.spriteScale);
   const before = await row();
   await clickWater(page, { view: targets.view, water });
   // The ring's radius from the brightest change along the row to the right of the drop.
@@ -1146,7 +1265,7 @@ check('a ripple spreads at 24 px a second and fades out in a second', ['desktop'
     await page.waitForFunction((age) => window.__pond.ripples().some((r) => r.age >= age), ageMs, { polling: 10, timeout: 3000 });
     const [{ age }, now] = await Promise.all([page.evaluate(() => window.__pond.ripples()[0]), row()]);
     let best = { diff: 0, r: -1 };
-    for (let r = 4; r < 40; r += 1) {
+    for (let r = 4; r < 40 * spriteScale; r += 1) {
       const diff = now[water.x + r] - before[water.x + r];
       if (diff > best.diff) best = { diff, r };
     }
@@ -1154,7 +1273,7 @@ check('a ripple spreads at 24 px a second and fades out in a second', ['desktop'
   };
   for (const ageMs of [250, 500, 750]) {
     const seen = await radiusAt(ageMs);
-    const expected = (seen.age / 1000) * 24;
+    const expected = (seen.age / 1000) * 24 * spriteScale;
     assert.ok(seen.diff > 25, `a ring is visible at ${ageMs} ms (diff ${seen.diff})`);
     assert.ok(Math.abs(seen.r - expected) <= 2.5, `radius ${seen.r} at ${Math.round(seen.age)} ms, expected about ${expected.toFixed(1)}`);
   }
@@ -1315,6 +1434,14 @@ check('the light follows the clock', [], async () => {
   for (const hour of [6, 18]) assert.ok(at(hour).lift.a > 0, `a soft screen lift at ${hour}:00`);
   assert.ok(at(18).night === 0 && at(6).night === 0, 'dawn and dusk are not night');
   assert.ok(at(19).night > 0.4 && at(19).night < 0.6 && at(5).night > 0.4 && at(5).night < 0.6, 'night fades in and out on its boundaries');
+  // The phase's name: the steady phase, or in a blend window the one before the boundary
+  // until it, then the one after.
+  const names = [
+    [[2], 'night'], [[4, 49, 59], 'night'], [[4, 50], 'night'], [[4, 59, 59], 'night'], [[5], 'dawn'], [[5, 9, 59], 'dawn'],
+    [[5, 10], 'dawn'], [[6], 'dawn'], [[6, 59, 59], 'dawn'], [[7], 'day'], [[12], 'day'], [[16, 59, 59], 'day'],
+    [[17], 'dusk'], [[18], 'dusk'], [[18, 59, 59], 'dusk'], [[19], 'night'], [[19, 10, 1], 'night'], [[23, 59, 59], 'night'], [[0], 'night'],
+  ];
+  for (const [time, name] of names) assert.equal(at(...time).name, name, `${time.join(':')} is ${name}`);
 });
 
 // The mean brightness of the visible canvas, sampled on a grid.
@@ -1386,6 +1513,31 @@ check('fireflies drift, and hold still under reduced motion', ['desktop'], async
   assert.equal(spots(still), 1, 'reduced motion holds the fireflies still');
   assert.ok(blinks(still) > 1, 'and they still blink');
   assert.equal(still[0].length, 10);
+  assert.deepEqual(errors, []);
+});
+
+check('fireflies keep clear of the header and edges on laptop ponds', ['desktop'], async ({ page, errors, open }) => {
+  await atClock(page, 2);
+  assert.equal(await open(), null);
+  await settleLight(page);
+  const { spriteScale, top, width, height } = await page.evaluate(() => ({
+    spriteScale: window.__pond.state.spriteScale,
+    top: Math.ceil(window.__pond.state.headerHeight / window.__pond.view.scale),
+    width: window.__pond.view.pondWidth,
+    height: window.__pond.view.pondHeight,
+  }));
+  assert.equal(spriteScale, 2);
+  // The 6 px margin, at the sprites' scale, round each firefly's anchor.
+  const margin = 6 * spriteScale;
+  for (let index = 0; index < 20; index += 1) {
+    const spots = await page.evaluate(() => window.__pond.fireflySpots());
+    assert.equal(spots.length, 10);
+    for (const { x, y } of spots) {
+      assert.ok(x >= margin && x <= width - margin, `a firefly at x ${x} keeps ${margin} px from the sides`);
+      assert.ok(y >= top + margin && y <= height - margin, `a firefly at y ${y} keeps ${margin} px from the header (${top}) and the bottom`);
+    }
+    await page.waitForTimeout(100);
+  }
   assert.deepEqual(errors, []);
 });
 
@@ -1532,9 +1684,10 @@ if (!only) {
   }
   // The detail crop: a 4× context, clipped to the region floor.js names (a rock beside a
   // plant clump, away from the header).
-  const detailContext = await browser.newContext({ ...SIZES.desktop, deviceScaleFactor: 4 });
+  const detailContext = await browser.newContext({ timezoneId: 'UTC', ...SIZES.desktop, deviceScaleFactor: 4 });
   try {
     const page = await detailContext.newPage();
+    await atClock(page, 12);
     await page.goto(`${baseUrl}?fixture`);
     assert.equal(await waitForBoot(page), null);
     await floorHashAfterBoot(page);

@@ -19,7 +19,7 @@ mod legend;
 mod pads;
 
 use legend::{behavior_name, legend_from};
-use pads::{PadView, pads_from, rest_point};
+use pads::{PadView, pads_from, rest_point, scaled};
 
 /// The body names the git-koi command accepts (src/main.rs BODY_NAMES).
 const BODY_NAMES: [(&str, KoiBody); 6] = [
@@ -55,6 +55,13 @@ impl PondKoi {
     /// below the biggest pad (at the pond's center when there are no pads). `body` is one of
     /// white, black, asagi, tea, gold, platinum. The first frame is rendered here, so the
     /// pixel accessors are valid from the start.
+    ///
+    /// `sprite_scale` is the whole number the page draws its sprites at (web/src/view.js:
+    /// 2 on laptop-size ponds, else 1; 0 is taken as 1). The pads are laid out by git-koi
+    /// on a pond `floor(width / s)` by `floor(height / s)`, and each pad's x, y and diameter
+    /// are then multiplied by `s`, so the bigger pads stay inside the pond, keep git-koi's
+    /// gap (times `s`) between them, and rest the koi beside the biggest. At 1 the layout
+    /// is git-koi's own. The koi itself is never scaled.
     #[wasm_bindgen(constructor)]
     pub fn new(
         snapshot_json: &str,
@@ -62,6 +69,7 @@ impl PondKoi {
         pond_width: u32,
         pond_height: u32,
         seed: u64,
+        sprite_scale: u32,
     ) -> Result<PondKoi, JsError> {
         let account_snapshot: AccountSnapshot = serde_json::from_str(snapshot_json)
             .map_err(|error| JsError::new(&format!("invalid snapshot: {error}")))?;
@@ -76,9 +84,14 @@ impl PondKoi {
                     "unknown body {body:?}; expected white, black, asagi, tea, gold, or platinum"
                 ))
             })?;
-        let layout = layout_pond(&account_snapshot, pond_width, pond_height)
-            .map_err(|error| JsError::new(&error.to_string()))?;
-        let pads = pads_from(&account_snapshot, &layout);
+        let sprite_scale = sprite_scale.max(1);
+        let layout = layout_pond(
+            &account_snapshot,
+            pond_width / sprite_scale,
+            pond_height / sprite_scale,
+        )
+        .map_err(|error| JsError::new(&error.to_string()))?;
+        let pads = scaled(pads_from(&account_snapshot, &layout), sprite_scale);
         let (behavior, behavior_reason) = explain_behavior(&koi_development);
         let pond = Pond {
             width_pixels: f64::from(pond_width),
@@ -226,10 +239,96 @@ mod tests {
 
     const FIXTURE: &str = include_str!("../../../web/fixtures/snapshot.json");
 
+    const PINNED_1280X744: &str = include_str!("../testdata/pads-1280x744-scale1.json");
+    const PINNED_400X800: &str = include_str!("../testdata/pads-400x800-scale1.json");
+
+    fn pads_of(koi: &PondKoi) -> Vec<serde_json::Value> {
+        serde_json::from_str(&koi.pads_json()).unwrap()
+    }
+
+    #[test]
+    fn sprite_scale_one_keeps_todays_pads() {
+        let koi = PondKoi::new(FIXTURE, "gold", 1280, 744, 7, 1).ok().unwrap();
+        assert_eq!(koi.pads_json(), PINNED_1280X744.trim_end());
+        let koi = PondKoi::new(FIXTURE, "gold", 400, 800, 7, 1).ok().unwrap();
+        assert_eq!(koi.pads_json(), PINNED_400X800.trim_end());
+    }
+
+    #[test]
+    fn sprite_scale_zero_is_taken_as_one() {
+        let koi = PondKoi::new(FIXTURE, "gold", 1280, 744, 7, 0).ok().unwrap();
+        assert_eq!(koi.pads_json(), PINNED_1280X744.trim_end());
+    }
+
+    #[test]
+    fn sprite_scale_two_lays_out_bigger_pads_that_still_fit() {
+        let (width, height) = (1280.0, 744.0);
+        let koi = PondKoi::new(FIXTURE, "gold", 1280, 744, 7, 2).ok().unwrap();
+        let pads = pads_of(&koi);
+        assert_eq!(pads.len(), 7);
+        let disc = |pad: &serde_json::Value| {
+            (
+                pad["x"].as_f64().unwrap(),
+                pad["y"].as_f64().unwrap(),
+                pad["diameter"].as_f64().unwrap() / 2.0,
+            )
+        };
+        for pad in &pads {
+            let (x, y, radius) = disc(pad);
+            let diameter = pad["diameter"].as_u64().unwrap();
+            assert!((32..=96).contains(&diameter), "diameter {diameter}");
+            assert_eq!(
+                diameter % 16,
+                0,
+                "twice a native 8 + 8n diameter: {diameter}"
+            );
+            assert!(x - radius >= 0.0 && x + radius <= width, "{pad}");
+            assert!(y - radius >= 0.0 && y + radius <= height, "{pad}");
+        }
+        for (index, first) in pads.iter().enumerate() {
+            for second in &pads[index + 1..] {
+                let (x1, y1, r1) = disc(first);
+                let (x2, y2, r2) = disc(second);
+                let gap = (x1 - x2).hypot(y1 - y2) - r1 - r2;
+                assert!(gap >= 4.0 - 1e-9, "gap {gap} between {first} and {second}");
+            }
+        }
+        // The biggest pad is twice today's biggest, and the koi rests beside it.
+        let biggest = pads
+            .iter()
+            .max_by_key(|pad| pad["diameter"].as_u64().unwrap())
+            .unwrap();
+        assert_eq!(biggest["diameter"], 96);
+        let (x, y, radius) = disc(biggest);
+        let [rest_x, rest_y] = koi.pond.rest_point;
+        assert_eq!(rest_x, x.clamp(0.0, width));
+        assert!((rest_y - (y + 1.2 * radius).clamp(0.0, height)).abs() < 1e-9);
+    }
+
+    #[test]
+    fn sprite_scale_two_doubles_a_half_size_layout() {
+        let small = PondKoi::new(FIXTURE, "gold", 640, 372, 7, 1).ok().unwrap();
+        let big = PondKoi::new(FIXTURE, "gold", 1281, 745, 7, 2).ok().unwrap();
+        let (small, big) = (pads_of(&small), pads_of(&big));
+        assert_eq!(small.len(), big.len());
+        for (one, two) in small.iter().zip(&big) {
+            assert_eq!(one["repo"], two["repo"]);
+            assert_eq!(one["notch"], two["notch"]);
+            assert_eq!(one["size"], two["size"]);
+            for field in ["x", "y", "diameter"] {
+                assert_eq!(
+                    2.0 * one[field].as_f64().unwrap(),
+                    two[field].as_f64().unwrap(),
+                    "{field}"
+                );
+            }
+        }
+    }
+
     #[test]
     fn tiny_ponds_build_a_koi_without_panicking() {
         for (width, height) in [(10, 10), (0, 0), (30, 300)] {
-            let koi = PondKoi::new(FIXTURE, "gold", width, height, 7)
+            let koi = PondKoi::new(FIXTURE, "gold", width, height, 7, 2)
                 .ok()
                 .unwrap();
             assert!(koi.pads_json().starts_with('['));
@@ -238,7 +337,7 @@ mod tests {
 
     #[test]
     fn a_growth_override_that_crosses_a_milestone_makes_the_koi_dart() {
-        let mut koi = PondKoi::new(FIXTURE, "gold", 640, 360, 7).ok().unwrap();
+        let mut koi = PondKoi::new(FIXTURE, "gold", 640, 360, 7, 1).ok().unwrap();
         assert_eq!(koi.behavior(), "cruise");
         koi.set_growth_override(1003.0);
         assert_eq!(koi.behavior(), "dart");
@@ -250,7 +349,7 @@ mod tests {
 
     #[test]
     fn the_growth_override_moves_the_legend() {
-        let mut koi = PondKoi::new(FIXTURE, "gold", 640, 360, 7).ok().unwrap();
+        let mut koi = PondKoi::new(FIXTURE, "gold", 640, 360, 7, 1).ok().unwrap();
         koi.set_growth_override(2000.0);
         let legend: serde_json::Value = serde_json::from_str(&koi.legend_json()).unwrap();
         assert_eq!(legend["growthStage"], "juvenile");

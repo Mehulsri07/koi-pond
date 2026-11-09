@@ -91,6 +91,19 @@ pub fn pads_from(account_snapshot: &AccountSnapshot, layout: &PondLayout) -> Vec
         .collect()
 }
 
+/// The pads drawn `sprite_scale` times bigger: each center and diameter multiplied by it.
+/// A layout made for a pond `floor(w / s)` by `floor(h / s)` then fits a `w` by `h` pond.
+pub fn scaled(mut pads: Vec<PadView>, sprite_scale: u32) -> Vec<PadView> {
+    if sprite_scale > 1 {
+        for pad in &mut pads {
+            pad.x *= f64::from(sprite_scale);
+            pad.y *= f64::from(sprite_scale);
+            pad.diameter *= sprite_scale;
+        }
+    }
+    pads
+}
+
 /// Whether a name is `owner/name` made only of letters, digits, `.`, `_`, and `-`.
 fn is_plain_name(name_with_owner: &str) -> bool {
     let is_part = |part: &str| {

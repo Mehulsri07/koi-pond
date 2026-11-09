@@ -1,7 +1,7 @@
 // The lighting layer: the pond graded by the visitor's clock, and at night a moon on the
 // water and fireflies over it. It is the top layer.
 //
-//   phaseAt(date) -> {grade, lift, night}   pure; the light at the Date's local time
+//   phaseAt(date) -> {name, grade, lift, night}   pure; the light at the Date's local time
 //   draw(ctx, state, now) / rebuild(state)  the layer contract (web/src/main.js)
 //   fireflyCount()   fireflies drawn by the last draw (0 by day)
 //   spots()          [{x, y, frame}]: where the last draw put each firefly (its anchor
@@ -15,6 +15,9 @@
 //          Night is rgba(30,45,90,0.55).
 //   lift   {r, g, b, a}: a soft `screen` fill after the grade, at dawn and dusk only.
 //   night  0 by day, dawn and dusk; 1 at night; between on the 05:00 and 19:00 blends.
+//   name   "dawn" | "day" | "dusk" | "night": the steady phase the time falls in; inside a
+//          blend window, the phase being left until the boundary (the window's midpoint)
+//          and the phase being blended into from it on, so 17:00 is "dusk".
 //
 // While night > 0 the moon reflection (sprite moon-reflection) and 10 fireflies
 // (firefly-0 glowing, firefly-1 dim) are drawn over the grade, since they give light, at
@@ -24,15 +27,20 @@
 // the header and the edges, and blinks with a seeded period of 0.5–1.5 s. Under reduced
 // motion the fireflies hold still and only blink, and the moon does not wobble. Every
 // sprite lands on whole pond pixels.
+//
+// At state.spriteScale s (2 on laptop ponds) the moon and the fireflies are drawn s times
+// bigger, nearest-neighbor, and every distance above scales with them: the edge and header
+// margins, the moon's place and wobble, and the fireflies' drift. Firefly homes stay
+// fractions of the free area.
 import { createRandom, seedOf } from './rand.js';
 
 export const name = 'lighting';
 
 const BLEND_HOURS = 20 / 60;
-const NIGHT = { grade: { r: 30, g: 45, b: 90, a: 0.55 }, lift: { r: 255, g: 255, b: 255, a: 0 }, night: 1 };
-const DAWN = { grade: { r: 225, g: 200, b: 235, a: 0.24 }, lift: { r: 255, g: 200, b: 170, a: 0.07 }, night: 0 };
-const DAY = { grade: { r: 255, g: 255, b: 255, a: 0 }, lift: { r: 255, g: 255, b: 255, a: 0 }, night: 0 };
-const DUSK = { grade: { r: 255, g: 176, b: 160, a: 0.32 }, lift: { r: 255, g: 120, b: 60, a: 0.06 }, night: 0 };
+const NIGHT = { name: 'night', grade: { r: 30, g: 45, b: 90, a: 0.55 }, lift: { r: 255, g: 255, b: 255, a: 0 }, night: 1 };
+const DAWN = { name: 'dawn', grade: { r: 225, g: 200, b: 235, a: 0.24 }, lift: { r: 255, g: 200, b: 170, a: 0.07 }, night: 0 };
+const DAY = { name: 'day', grade: { r: 255, g: 255, b: 255, a: 0 }, lift: { r: 255, g: 255, b: 255, a: 0 }, night: 0 };
+const DUSK = { name: 'dusk', grade: { r: 255, g: 176, b: 160, a: 0.32 }, lift: { r: 255, g: 120, b: 60, a: 0.06 }, night: 0 };
 // [hour, phase before, phase after], in order through the day.
 const BOUNDARIES = [
   [5, NIGHT, DAWN],
@@ -53,7 +61,7 @@ function lerpColor(a, b, t) {
 }
 
 function phaseResult(phase) {
-  return { grade: { ...phase.grade, mode: 'multiply' }, lift: { ...phase.lift }, night: phase.night };
+  return { name: phase.name, grade: { ...phase.grade, mode: 'multiply' }, lift: { ...phase.lift }, night: phase.night };
 }
 
 export function phaseAt(date) {
@@ -62,6 +70,7 @@ export function phaseAt(date) {
     const t = (hour - (at - BLEND_HOURS / 2)) / BLEND_HOURS;
     if (t > 0 && t < 1) {
       return {
+        name: t < 0.5 ? before.name : after.name,
         grade: { ...lerpColor(before.grade, after.grade, t), mode: 'multiply' },
         lift: lerpColor(before.lift, after.lift, t),
         night: before.night + (after.night - before.night) * t,
@@ -161,8 +170,9 @@ function rgba({ r, g, b, a }) {
   return `rgba(${Math.round(r)}, ${Math.round(g)}, ${Math.round(b)}, ${a.toFixed(4)})`;
 }
 
-function drawSprite(ctx, sprite, x, y) {
-  ctx.drawImage(sprite.image, Math.round(x) - sprite.anchor[0], Math.round(y) - sprite.anchor[1]);
+function drawSprite(ctx, sprite, x, y, s) {
+  const { image, anchor } = sprite;
+  ctx.drawImage(image, Math.round(x) - anchor[0] * s, Math.round(y) - anchor[1] * s, image.width * s, image.height * s);
 }
 
 export function draw(ctx, state, now) {
@@ -185,25 +195,28 @@ export function draw(ctx, state, now) {
   ctx.globalCompositeOperation = 'source-over';
   if (phase.night > 0 && sprites && state.accountId !== null) {
     ctx.globalAlpha = Math.min(1, phase.night);
+    ctx.imageSmoothingEnabled = false;
+    const s = state.spriteScale ?? 1;
+    const margin = EDGE_MARGIN * s;
     const seconds = now / 1000;
     const still = state.reducedMotion;
-    const top = Math.ceil(state.headerHeight / state.view.scale) + EDGE_MARGIN;
-    const wobble = still ? 0 : Math.round(0.5 + 0.5 * Math.sin((seconds * 2 * Math.PI) / MOON_WOBBLE_SECONDS));
-    drawSprite(ctx, sprites['moon-reflection'], width - MOON_FROM_RIGHT + wobble, Math.min(top + MOON_BELOW_HEADER, height - EDGE_MARGIN));
-    const left = EDGE_MARGIN;
-    const right = width - EDGE_MARGIN;
-    const bottom = Math.max(top, height - EDGE_MARGIN);
+    const top = Math.ceil(state.headerHeight / state.view.scale) + margin;
+    const wobble = still ? 0 : s * Math.round(0.5 + 0.5 * Math.sin((seconds * 2 * Math.PI) / MOON_WOBBLE_SECONDS));
+    drawSprite(ctx, sprites['moon-reflection'], width - MOON_FROM_RIGHT * s + wobble, Math.min(top + MOON_BELOW_HEADER * s, height - margin), s);
+    const left = margin;
+    const right = width - margin;
+    const bottom = Math.max(top, height - margin);
     const time = still ? 0 : seconds;
     for (const path of pathsForAccount(state.accountId)) {
       // Keep the whole drift inside the free area; a small pond squeezes the drift.
-      const ax = Math.min(path.ax, (right - left) / 2);
-      const ay = Math.min(path.ay, (bottom - top) / 2);
+      const ax = Math.min(path.ax * s, (right - left) / 2);
+      const ay = Math.min(path.ay * s, (bottom - top) / 2);
       const homeX = left + ax + path.u * Math.max(0, right - left - 2 * ax);
       const homeY = top + ay + path.v * Math.max(0, bottom - top - 2 * ay);
       const x = Math.round(homeX + ax * (0.65 * Math.sin(path.fx[0] * time + path.px[0]) + 0.35 * Math.sin(path.fx[1] * time + path.px[1])));
       const y = Math.round(homeY + ay * (0.65 * Math.sin(path.fy[0] * time + path.py[0]) + 0.35 * Math.sin(path.fy[1] * time + path.py[1])));
       const frame = (seconds / path.period + path.blink) % 1 < 0.5 ? 0 : 1;
-      drawSprite(ctx, sprites[`firefly-${frame}`], x, y);
+      drawSprite(ctx, sprites[`firefly-${frame}`], x, y, s);
       drawnSpots.push({ x, y, frame });
     }
   }
