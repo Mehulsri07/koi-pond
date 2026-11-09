@@ -999,6 +999,22 @@ check('sprites double on laptop ponds', ['desktop', 'phone', 'wide'], async ({ p
   assert.deepEqual(errors, []);
 });
 
+check('no pad sits under the header', BOTH, async ({ page, errors, open }) => {
+  assert.equal(await open(), null);
+  await padTargets(page);
+  const seen = await page.evaluate(() => ({
+    headerBottom: document.querySelector('.site-header').getBoundingClientRect().bottom,
+    scale: window.__pond.view.scale,
+    pads: window.__pond.state.pads.map(({ repo, y, diameter }) => ({ repo, y, diameter })),
+  }));
+  assert.equal(seen.pads.length, 7);
+  for (const pad of seen.pads) {
+    const top = (pad.y - pad.diameter / 2) * seen.scale; // CSS px
+    assert.ok(top >= seen.headerBottom, `${pad.repo}'s top at ${top} CSS px is below the header's bottom (${seen.headerBottom})`);
+  }
+  assert.deepEqual(errors, []);
+});
+
 // Whether any two pads overlap or crowd closer than `gap` pond px.
 function crowded(pads, gap) {
   for (let one = 0; one < pads.length; one += 1) {

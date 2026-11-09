@@ -91,6 +91,14 @@ pub fn pads_from(account_snapshot: &AccountSnapshot, layout: &PondLayout) -> Vec
         .collect()
 }
 
+/// The pads moved `pixels` down.
+pub fn moved_down(mut pads: Vec<PadView>, pixels: u32) -> Vec<PadView> {
+    for pad in &mut pads {
+        pad.y += f64::from(pixels);
+    }
+    pads
+}
+
 /// The pads drawn `sprite_scale` times bigger: each center and diameter multiplied by it.
 /// A layout made for a pond `floor(w / s)` by `floor(h / s)` then fits a `w` by `h` pond.
 pub fn scaled(mut pads: Vec<PadView>, sprite_scale: u32) -> Vec<PadView> {

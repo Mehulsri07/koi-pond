@@ -1,6 +1,8 @@
 // The koi: a wrapper around the WebAssembly PondKoi, and the koi layer.
 //
-//   const koi = create(view, { PondKoi, memory, snapshotJson, body, seed });
+//   const koi = create(view, { PondKoi, memory, snapshotJson, body, seed, topInset });
+//                       // topInset(view): pond px at the top the pads keep clear of, read
+//                       // at each build (optional; 0 when absent)
 //   koi.rebuild(view)   // a new PondKoi at the new pond size and sprite scale; the old one is freed
 //   koi.step(dt)        // advance dt seconds; true on a gulp
 //   koi.dropFood(x, y)  // put food at a pond point, replacing any already there
@@ -115,9 +117,11 @@ export function create(view, source) {
   let renders = 0;
 
   function build(nextView) {
-    const { PondKoi, snapshotJson, body, seed } = source;
-    // The pads are laid out for the sprites' scale (view.spriteScale), so they fit drawn big.
-    const next = new PondKoi(snapshotJson, body, nextView.pondWidth, nextView.pondHeight, seed, nextView.spriteScale ?? 1);
+    const { PondKoi, snapshotJson, body, seed, topInset } = source;
+    // The pads are laid out for the sprites' scale (view.spriteScale), so they fit drawn
+    // big, and below the header.
+    const inset = topInset?.(nextView) ?? 0;
+    const next = new PondKoi(snapshotJson, body, nextView.pondWidth, nextView.pondHeight, seed, nextView.spriteScale ?? 1, inset);
     live += 1;
     release();
     instance = next;

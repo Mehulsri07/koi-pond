@@ -15,9 +15,9 @@
 //          Night is rgba(30,45,90,0.55).
 //   lift   {r, g, b, a}: a soft `screen` fill after the grade, at dawn and dusk only.
 //   night  0 by day, dawn and dusk; 1 at night; between on the 05:00 and 19:00 blends.
-//   name   "dawn" | "day" | "dusk" | "night": the steady phase the time falls in; inside a
-//          blend window, the phase being left until the boundary (the window's midpoint)
-//          and the phase being blended into from it on, so 17:00 is "dusk".
+//   name   "dawn" | "day" | "dusk" | "night": the phase the time falls in, switching at
+//          the boundary time itself even though the color blends over the 20 minutes
+//          around it: 04:59:59 is "night", 05:00 is "dawn", 17:00 is "dusk".
 //
 // While night > 0 the moon reflection (sprite moon-reflection) and 10 fireflies
 // (firefly-0 glowing, firefly-1 dim) are drawn over the grade, since they give light, at

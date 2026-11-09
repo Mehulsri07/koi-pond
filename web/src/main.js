@@ -17,7 +17,8 @@
 //               pixels); 2 on laptop-size ponds, else 1. Ripples spread that much farther.
 //               The koi's pads are laid out for it (PondKoi::new's sprite_scale), so a
 //               change rebuilds the koi and the layers like a new pond size.
-//   koi         the koi (web/src/koi.js), or null before boot or after a failure
+//   koi         the koi (web/src/koi.js), or null before boot or after a failure. Its pads
+//               are laid out below the header as it measured at the koi's build.
 //   pads        pads_json(), parsed ([] until the koi exists)
 //   legend      legend_json(), parsed (null until the koi exists)
 //   snapshot    the parsed snapshot (null until read)
@@ -353,6 +354,14 @@ new ResizeObserver(() => {
   document.documentElement.style.setProperty('--header-height', `${header.offsetHeight}px`);
 }).observe(header);
 
+// The pond pixels at the top the pads keep clear of: the header, measured now, plus
+// PAD_HEADER_GAP. Read once per koi build (the pads are laid out then), so a header that
+// wraps later does not reshuffle the pads; the next settled resize lays them out again.
+const PAD_HEADER_GAP = 4;
+function padTopInset(view) {
+  return Math.ceil(header.offsetHeight / view.scale) + PAD_HEADER_GAP;
+}
+
 function timeLayer(name, ms) {
   const average = hooks.layerMs[name];
   hooks.layerMs[name] = average === undefined ? ms : average * 0.95 + ms * 0.05;
@@ -542,6 +551,7 @@ async function boot() {
       snapshotJson,
       body: BODY,
       seed: seedFrom(state.snapshot),
+      topInset: padTopInset,
     });
   } catch (error) {
     report('data', DATA_ERROR, error);
