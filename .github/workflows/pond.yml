@@ -1,0 +1,137 @@
+# Nightly: collect Mehulsri07's GitHub snapshot, build the pond, deploy it to GitHub Pages.
+# One workflow, because a commit pushed with the workflow token does not trigger other
+# workflows. The default branch is never named here: it is whatever the repository's default is.
+name: pond
+
+on:
+  schedule:
+    - cron: "20 0 * * *"
+  workflow_dispatch:
+  # Expressions are not allowed in the trigger, so every push starts a run and the jobs
+  # below stay out of it unless the push is to the default branch.
+  push:
+
+# Never cancel a run in flight: a half-finished deploy is worse than a queued one.
+concurrency:
+  group: pond
+  cancel-in-progress: false
+
+permissions: {}
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  collect:
+    # Schedule and manual runs only; a push builds the committed snapshot.
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable branch
+        with:
+          toolchain: stable
+      - name: Cache cargo
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: |
+            ~/.cargo/bin
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: collect-${{ runner.os }}-${{ hashFiles('crates/pond-wasm/Cargo.toml') }}
+      - name: Install git-koi at the pinned rev
+        run: |
+          rev=$(sed -n 's/^git-koi = .*rev = "\([0-9a-f]\{40\}\)".*/\1/p' crates/pond-wasm/Cargo.toml)
+          test -n "$rev" || { echo "::error::could not read the git-koi rev from crates/pond-wasm/Cargo.toml"; exit 1; }
+          echo "git-koi rev: $rev"
+          cargo install --git https://github.com/Mehulsri07/git-koi --rev "$rev" --locked git-koi
+      - name: Collect the snapshot
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p web/data
+          git-koi collect Mehulsri07 --output web/data/snapshot.json
+      - name: Commit the snapshot if it changed
+        run: |
+          git add web/data/snapshot.json
+          if git diff --cached --quiet; then
+            echo "snapshot unchanged; nothing to commit"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "data: nightly snapshot $(date -u +%Y-%m-%d)"
+          git push origin "HEAD:${{ github.event.repository.default_branch }}"
+
+  build:
+    needs: collect
+    # Run after a successful collect, or when collect was skipped (a push); never after a
+    # failed or cancelled collect, so a failed collect fails the run and deploys nothing.
+    # A push to any other branch skips everything.
+    if: >-
+      ${{ !cancelled()
+      && (needs.collect.result == 'success'
+      || (needs.collect.result == 'skipped'
+      && github.event_name == 'push'
+      && github.ref_name == github.event.repository.default_branch)) }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      # The latest default-branch head, so the collect job's commit is included.
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable branch
+        with:
+          toolchain: stable
+          targets: wasm32-unknown-unknown
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22
+      - name: Cache cargo
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: |
+            ~/.cargo/bin
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: build-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
+      - name: Install wasm-bindgen-cli at the lockfile's version
+        run: |
+          version=$(scripts/build.sh --wasm-bindgen-version)
+          if [ "$(wasm-bindgen --version 2>/dev/null | awk '{ print $2 }')" != "$version" ]; then
+            cargo install wasm-bindgen-cli --version "$version" --locked
+          fi
+      - name: Build the site into dist/
+        run: scripts/build.sh
+      - uses: actions/upload-pages-artifact@56afc609e74202658d3ffba0e8f6dda462b719fa # v3.0.1
+        with:
+          path: dist
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      # actions/deploy-pages fails with a cryptic error when Pages is off, so say what to
+      # do first. A failed check only annotates; the deploy step below is what decides.
+      - name: Check that GitHub Pages is enabled
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if ! gh api "repos/${{ github.repository }}/pages" --silent 2>/dev/null; then
+            echo "::error title=GitHub Pages is not enabled::Enable GitHub Pages: Settings → Pages → Source: GitHub Actions, then re-run this workflow. The deploy step below will fail until then."
+          fi
+      - id: deployment
+        uses: actions/deploy-pages@d6db90164ac5ed86f2b6aed7e0febac5b3c0c03e # v4.0.5

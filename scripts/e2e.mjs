@@ -1,8 +1,12 @@
 // End-to-end checks for the pond site in headless Chromium.
 //
-//   node scripts/e2e.mjs [--only <text>] [--screenshots <dir>]
+//   node scripts/e2e.mjs [--only <text>] [--screenshots <dir>] [--root dist]
 //
 // Run scripts/build.sh first so web/pkg exists (the script stops at once if it does not).
+// --root dist serves the built Pages site (dist/) instead of web/: the same checks, against
+// what is deployed. dist/ has no fixtures/ by design, so in that mode the harness itself
+// serves /fixtures/ from web/fixtures (the test inputs); the page still gets real data from
+// dist/data/snapshot.json, and one extra check asserts dist/ ships no fixtures.
 // It serves web/ itself on a free port, loads the page with ?fixture
 // (web/fixtures/snapshot.json), runs every check at each size it names, saves desktop and
 // phone screenshots (plus one with a pad's card open, a 4× floor detail crop, and night and
@@ -28,12 +32,16 @@ import assert from 'node:assert/strict';
 const require = createRequire(import.meta.url);
 const { chromium } = require('playwright');
 
-const WEB_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', 'web');
+const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
+const WEB_ROOT = join(REPO_ROOT, 'web');
 
 function argument(name) {
   const index = process.argv.indexOf(name);
   return index === -1 ? null : process.argv[index + 1];
 }
+// What the server serves: web/ by default, or --root <dir> (e.g. dist) under the repo.
+const SERVE_ROOT = argument('--root') ? resolve(REPO_ROOT, argument('--root')) : WEB_ROOT;
+const SERVING_BUILD = SERVE_ROOT !== WEB_ROOT;
 const SCREENSHOT_DIR = resolve(argument('--screenshots') ?? process.env.E2E_SCREENSHOTS ?? join(tmpdir(), 'koi-pond-e2e'));
 const SCREENSHOTS = {
   desktop: join(SCREENSHOT_DIR, 'site-pads-desktop.png'),
@@ -55,8 +63,8 @@ const SCREENSHOTS = {
 
 // Pre-flight: without the wasm build every page check would only time out.
 for (const file of ['pond_wasm.js', 'pond_wasm_bg.wasm']) {
-  if (!existsSync(join(WEB_ROOT, 'pkg', file))) {
-    console.error(`web/pkg/${file} is missing: run scripts/build.sh first`);
+  if (!existsSync(join(SERVE_ROOT, 'pkg', file))) {
+    console.error(`${SERVE_ROOT}/pkg/${file} is missing: run scripts/build.sh first`);
     process.exit(1);
   }
 }
@@ -86,8 +94,9 @@ const CONTENT_TYPES = {
 function serve() {
   const server = createServer(async (request, response) => {
     const path = normalize(decodeURIComponent(new URL(request.url, 'http://x').pathname));
-    const file = join(WEB_ROOT, path.endsWith('/') ? `${path}index.html` : path);
-    if (!file.startsWith(WEB_ROOT)) {
+    const root = SERVING_BUILD && path.startsWith('/fixtures/') ? WEB_ROOT : SERVE_ROOT;
+    const file = join(root, path.endsWith('/') ? `${path}index.html` : path);
+    if (!file.startsWith(root)) {
       response.writeHead(403).end();
       return;
     }
@@ -268,13 +277,21 @@ check('a valid snapshot the koi cannot use shows a message', ['desktop'], async 
   assert.match(await page.locator('#message').innerText(), /The pond's data could not be read/);
 });
 
+if (SERVING_BUILD) {
+  check('the build ships data and no fixtures', ['desktop'], async () => {
+    assert.ok(existsSync(join(SERVE_ROOT, 'data', 'snapshot.json')), 'dist/data/snapshot.json');
+    assert.ok(!existsSync(join(SERVE_ROOT, 'fixtures')), 'dist/ must not contain fixtures/');
+  });
+}
+
 check('the snapshot falls back to the fixture only when missing', ['desktop'], async ({ page, errors, open }) => {
   const requested = [];
   page.on('request', (request) => requested.push(new URL(request.url()).pathname));
   // Without ?fixture: data/snapshot.json is missing in this repo, so the fixture loads.
+  // (In a build, dist/data/snapshot.json exists, so the fixture is not fetched.)
   assert.equal(await open(''), null);
   assert.ok(requested.includes('/data/snapshot.json'));
-  assert.ok(requested.includes('/fixtures/snapshot.json'));
+  assert.equal(requested.includes('/fixtures/snapshot.json'), !SERVING_BUILD);
   // A data/snapshot.json that exists is used, and the fixture is not fetched.
   const fixture = await readFile(join(WEB_ROOT, 'fixtures', 'snapshot.json'), 'utf8');
   await page.route('**/data/snapshot.json', (route) =>
