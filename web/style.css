@@ -222,6 +222,8 @@ html, body {
 }
 
 .pad-card[hidden] { display: none; }
+/* A mouse-hover card lets the pointer through to the pads under it. */
+.pad-card.pad-card-hover { pointer-events: none; }
 
 /* Error: centered plain text over the pond. */
 .message {

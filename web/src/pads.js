@@ -11,8 +11,9 @@
 //   attachInput(canvas, {getState, onWaterTap, card})   the pointer rules below
 //
 // The pads come from pads_json() (Task 3): x, y, diameter and notch are in pond pixels
-// and radians. Angles are screen angles with y down, as in git-koi's pond.rs (a point at
-// angle a is center + (cos a, sin a)): 0 points east, π/2 south. The sprites' compass
+// and radians. git-koi's pond.rs gives notch_radians no direction; the convention is
+// chosen here and matched to the art: screen angles with y down, so a point at angle a is
+// center + (cos a, sin a), 0 points east and π/2 south. The sprites' compass
 // has n up, so the notch rounds to the nearest of e, se, s, sw, w, nw, n, ne.
 //
 // Drawing, all hard-edged pixels into one pond-size bitmap built only when the pond's
@@ -37,10 +38,13 @@
 // droplet pixels only: a tap in the notch, on a ripple or on a bud is a tap on water.
 //
 // Input (attachInput):
-//   - A mouse (or pen) moving over a pad shows its card; over water it hides it.
+//   - A mouse (or pen) moving over a pad shows its card; over water it hides it. A
+//     hover card lets the pointer through, so a pad under it can still be hovered.
 //   - A mouse click on a pad with a url opens it in a new tab. A pad with no url is not
 //     clickable.
-//   - Touch: the first tap on a pad shows its card; a tap anywhere else hides it.
+//   - Touch: the first tap on a pad shows its card, which takes taps (its "Open repo"
+//     link); a tap anywhere else hides it.
+//   - Any rebuild of the layer (or a resize) hides the card.
 //   - A click or tap on water calls onWaterTap(x, y) in pond pixels; one on a pad never
 //     does.
 import { createRandom, seedOf } from './rand.js';
@@ -283,6 +287,7 @@ let loadError = null;
 let wanted = null; // the state the next build is for, while the sprites load
 let built = null;
 let builds = 0;
+let resetInput = null; // set by attachInput: forget the hovered pad and hide the card
 
 export function current() {
   return built;
@@ -310,22 +315,49 @@ function build(state) {
 }
 
 export function rebuild(state) {
-  if (!state.koi) return; // no pads to lay until the koi (and pads_json) exists
+  // Whatever moved, a card left open could point at a pad that is no longer there.
+  resetInput?.();
+  // No koi (before boot, or after a failed koi rebuild) means no pads: drop the old
+  // layer so its mask cannot answer taps on a pond it no longer matches.
+  if (!state.koi) {
+    built = null;
+    return;
+  }
   if (sprites) {
     build(state);
     return;
   }
+  const { pondWidth, pondHeight } = state.view;
+  if (built && (built.width !== pondWidth || built.height !== pondHeight)) built = null;
   wanted = state;
-  // Errors here (a sprite that will not load, a build that throws) are kept for draw()
-  // to throw, so main.js switches the layer off and says so like any other layer.
-  loading ??= loadSprites()
+  loadOnce();
+}
+
+// Load the sprites, then build for the latest wanted state. A first failure is retried
+// once, on the next rebuild or after RETRY_MS, whichever comes first; a failed retry (or
+// a build that throws) is kept for draw() to throw, so main.js switches the layer off
+// and says so like any other layer.
+const RETRY_MS = 3000;
+let loadFailures = 0;
+let retryTimer = 0;
+function loadOnce() {
+  if (loading || loadError) return;
+  clearTimeout(retryTimer);
+  loading = loadSprites()
     .then((loaded) => {
       sprites = loaded;
       if (wanted) build(wanted);
       wanted = null;
     })
     .catch((error) => {
-      loadError = error;
+      loadFailures += 1;
+      if (sprites || loadFailures > 1) {
+        loadError = error;
+        return;
+      }
+      console.warn('Lilypad sprites failed to load; retrying once:', error);
+      loading = null;
+      retryTimer = setTimeout(loadOnce, RETRY_MS);
     });
 }
 
@@ -341,6 +373,7 @@ export function padAt(x, y) {
   if (!built) return null;
   const px = Math.floor(x);
   const py = Math.floor(y);
+  // built always matches the pond it was laid for; rebuild() drops one that does not.
   if (px < 0 || py < 0 || px >= built.width || py >= built.height) return null;
   const id = built.hitMask[py * built.width + px];
   return id ? built.pads[id - 1] ?? null : null;
@@ -373,7 +406,7 @@ export function attachInput(canvas, { getState, onWaterTap, card }) {
     canvas.style.cursor = pad?.url ? 'pointer' : '';
     if (pad === hovered) return;
     hovered = pad;
-    if (pad) card.show(pad, event.clientX, event.clientY);
+    if (pad) card.show(pad, event.clientX, event.clientY, { interactive: false });
     else card.hide();
   });
 
@@ -397,7 +430,7 @@ export function attachInput(canvas, { getState, onWaterTap, card }) {
     const pad = padAt(x, y);
     if (type === 'touch') {
       if (pad) {
-        if (card.shownFor() !== pad) card.show(pad, event.clientX, event.clientY);
+        if (card.shownFor() !== pad) card.show(pad, event.clientX, event.clientY, { interactive: true });
         return;
       }
       card.hide();
@@ -411,8 +444,9 @@ export function attachInput(canvas, { getState, onWaterTap, card }) {
   addEventListener('keydown', (event) => {
     if (event.key === 'Escape' && card.shownFor()) card.hide();
   });
-  addEventListener('resize', () => {
+  resetInput = () => {
     hovered = null;
     card.hide();
-  });
+  };
+  addEventListener('resize', resetInput);
 }

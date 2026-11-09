@@ -808,6 +808,8 @@ check('hovering a pad names its repo', ['desktop'], async ({ page, errors, open 
     const box = await card.boundingBox();
     const viewport = page.viewportSize();
     assert.ok(box.x >= 0 && box.y >= 0 && box.x + box.width <= viewport.width && box.y + box.height <= viewport.height, `card box ${JSON.stringify(box)}`);
+    // A hover card lets the pointer through, so a neighboring pad under it still hovers.
+    assert.equal(await card.evaluate((element) => getComputedStyle(element).pointerEvents), 'none');
     const dot = await card.locator('.pad-card-dot').evaluate((element) => getComputedStyle(element).backgroundColor);
     if (pad.languageColor) {
       const hex = pad.languageColor.slice(1).match(/../g).map((part) => parseInt(part, 16));
@@ -856,6 +858,8 @@ check('tapping a pad drops no food', ['phone'], async ({ page, errors, open }) =
   await page.touchscreen.tap(point.x, point.y);
   await card.waitFor({ state: 'visible', timeout: 2000 });
   assert.ok((await card.innerText()).includes(pad.repo.split('/')[1]));
+  // A touch card stays tappable, so its "Open repo" link works.
+  assert.equal(await card.evaluate((element) => getComputedStyle(element).pointerEvents), 'auto');
   await page.waitForTimeout(300);
   assert.equal(await page.evaluate(() => window.__pond.foodDrops), 0, 'a tap on a pad drops no food');
   assert.equal(popups, 0, 'the first tap only shows the card');
@@ -908,6 +912,69 @@ check('the pads cost one blit a frame', ['desktop'], async ({ page, open }) => {
   await page.waitForFunction((count) => window.__pond.padBuilds === count + 1, builds, { timeout: 5000 });
   await page.waitForTimeout(300);
   assert.equal(await page.evaluate(() => window.__pond.padBuilds), builds + 1, 'one rebuild for one new pond size');
+});
+
+
+// Rebuild the pad layer the way main.js does, without a resize.
+const rebuildPads = (page) => page.evaluate(() => window.__pond.layers.find((layer) => layer.name === 'pads').rebuild(window.__pond.state));
+
+check('a rebuild hides the card and the mask follows the pond', ['desktop'], async ({ page, open }) => {
+  assert.equal(await open(), null);
+  const targets = await padTargets(page);
+  const pad = reachable(targets).sort((a, b) => a.y - b.y)[0];
+  const point = clientPoint(targets.view, pad.inside);
+  const card = page.locator('#pad-card');
+  await page.mouse.move(point.x, point.y);
+  await card.waitFor({ state: 'visible', timeout: 2000 });
+  await rebuildPads(page);
+  await card.waitFor({ state: 'hidden', timeout: 1000 });
+  // A koi rebuild that fails leaves no pads: the old pond's mask must not answer taps.
+  await page.evaluate(() => {
+    const source = window.__pond.state.koi.source;
+    source.PondKoi = function PondKoi() { throw new Error('no room for a koi'); };
+  });
+  await resizeAndSettle(page, { width: targets.view.pondWidth, height: targets.view.pondHeight - 100 });
+  const after = await page.evaluate(() => {
+    const mask = window.__pond.padMask();
+    return { mask: mask && { width: mask.width, height: mask.height }, view: window.__pond.view, koi: window.__pond.state.koi !== null };
+  });
+  assert.equal(after.koi, false);
+  assert.ok(after.mask === null || (after.mask.width === after.view.pondWidth && after.mask.height === after.view.pondHeight), `mask ${JSON.stringify(after.mask)}`);
+  const before = await page.evaluate(() => window.__pond.foodDrops);
+  await page.mouse.move(point.x, point.y);
+  await page.mouse.click(point.x, point.y);
+  await page.waitForTimeout(200);
+  assert.equal(await card.isVisible(), false, 'no card for a pad that is not drawn');
+  assert.equal(await page.evaluate(() => window.__pond.foodDrops), before + 1, 'the old pad spot is water now');
+});
+
+check('a sprite that fails once loads on the next rebuild', ['desktop'], async ({ page, open }) => {
+  let failures = 0;
+  await page.route('**/art/droplet.png', (route) => {
+    if (failures < 1) {
+      failures += 1;
+      return route.abort();
+    }
+    return route.continue();
+  });
+  assert.equal(await open(), null);
+  await page.waitForFunction(() => window.__pond.frames > 10);
+  await page.waitForTimeout(300);
+  assert.equal(failures, 1);
+  assert.deepEqual(await page.evaluate(() => ({ builds: window.__pond.padBuilds, error: window.__pond.error })), { builds: 0, error: null }, 'one failure is not shown');
+  await rebuildPads(page);
+  await page.waitForFunction(() => window.__pond.padBuilds > 0, null, { timeout: 5000 });
+  assert.equal(await page.evaluate(() => window.__pond.error), null);
+  await padTargets(page);
+
+  // Failing again on the retry says so.
+  await page.unroute('**/art/droplet.png');
+  await page.route('**/art/droplet.png', (route) => route.abort());
+  assert.equal(await open(), null);
+  await page.waitForTimeout(300);
+  await rebuildPads(page);
+  await page.waitForFunction(() => /Part of the pond could not be drawn/.test(window.__pond.error ?? ''), null, { timeout: 5000 });
+  assert.equal(await page.evaluate(() => window.__pond.state.koi !== null), true, 'the koi swims on');
 });
 
 // ---------------------------------------------------------------------------------------

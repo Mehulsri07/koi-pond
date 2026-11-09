@@ -4,8 +4,10 @@
 //   show(pad, clientX, clientY) / hide()   the page's card (#pad-card)
 //   const card = createCard(element)       a card on another element (the page's is
 //                                          pageCardInstance())
-//   card.show(pad, clientX, clientY)  fill the card for a pads_json() entry and place it
-//                                     beside the point, inside the viewport
+//   card.show(pad, clientX, clientY, {interactive})  fill the card for a pads_json()
+//                                     entry and place it beside the point, inside the
+//                                     viewport; interactive: false (a mouse-hover card)
+//                                     lets the pointer through to the pond
 //   card.hide()
 //   card.shownFor()                   the pad shown, or null
 //   card.element
@@ -68,8 +70,9 @@ export function createCard(root = document.getElementById('pad-card')) {
 
   return {
     element: root,
-    show(pad, clientX, clientY) {
+    show(pad, clientX, clientY, { interactive = true } = {}) {
       fill(pad);
+      root.classList.toggle('pad-card-hover', !interactive);
       root.hidden = false;
       shown = pad;
       place(clientX, clientY);
@@ -91,8 +94,8 @@ export function pageCardInstance() {
   pageCard ??= createCard();
   return pageCard;
 }
-export function show(pad, clientX, clientY) {
-  pageCardInstance().show(pad, clientX, clientY);
+export function show(pad, clientX, clientY, options) {
+  pageCardInstance().show(pad, clientX, clientY, options);
 }
 export function hide() {
   pageCardInstance().hide();
